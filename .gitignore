@@ -1,0 +1,22 @@
+# common
+*.log
+*.tmp
+
+# gradle
+.gradle/
+build/
+out/
+
+# java
+*.class
+bin/
+
+# go
+*.exe
+
+# external build cache (managed outside repo)
+zstdnet-build/
+
+# runtime / debug logs from local mod testing
+mods/**/logs/
+/.idea/.gitignore
