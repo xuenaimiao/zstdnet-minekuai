@@ -2371,6 +2371,8 @@ final class ServerProxyRuntime {
         public Thread newThread(Runnable r) {
             Thread t = new Thread(r, prefix + "-" + index.getAndIncrement());
             t.setDaemon(true);
+            // 后台压缩/转发/统计线程降低优先级，CPU 紧张时让位给服务器主线程（不改变压缩 level）。
+            t.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 2));
             return t;
         }
     }

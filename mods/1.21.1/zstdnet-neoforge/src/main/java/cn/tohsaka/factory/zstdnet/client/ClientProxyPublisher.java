@@ -104,6 +104,11 @@ public final class ClientProxyPublisher {
     private LocalZstdNet.ProxyHandle activeProxy;
     private LocalZstdNet.ProxyHandle activeSession;
     private boolean hudVisible = false;
+    private static final long HUD_FORMAT_INTERVAL_MS = 250L;
+    private static final String[] SIZE_UNITS = {"KB", "MB", "GB", "TB"};
+    private long lastHudFormatMs;
+    private String[] cachedHostLines;
+    private String[] cachedClientLines;
     private boolean singleplayerLanHintShown;
     private Object lastListEntry;
     private long lastListClickTime;
@@ -228,7 +233,6 @@ public final class ClientProxyPublisher {
         if (minecraft.player == null || minecraft.options.hideGui) {
             return;
         }
-        ServerProxyBootstrap.ServerHudSnapshot hostSnapshot = visibleHostSnapshot();
         boolean remoteServer = minecraft.getCurrentServer() != null;
         if (!remoteServer) {
             synchronized (stateLock) {
@@ -244,41 +248,57 @@ public final class ClientProxyPublisher {
             }
             session = remoteServer ? activeSession : null;
         }
+        // HUD 隐藏时已在上方提前返回；放到此处再取主机快照，连服且 HUD 关闭时省去每帧的快照与同步开销。
+        ServerProxyBootstrap.ServerHudSnapshot hostSnapshot = visibleHostSnapshot();
         if (session == null && hostSnapshot == null) {
             return;
+        }
+        // 统计每 ~500ms 才更新一次：HUD 文案按 HUD_FORMAT_INTERVAL_MS 节流重建，避免每帧 I18n.get + String.format + 数组分配。
+        long hudNow = System.currentTimeMillis();
+        boolean hudRefresh = (hudNow - lastHudFormatMs) >= HUD_FORMAT_INTERVAL_MS;
+        if (hudRefresh) {
+            lastHudFormatMs = hudNow;
         }
         GuiGraphics gui = event.getGuiGraphics();
         int y = 8;
 
         if (hostSnapshot != null) {
-            String hostMode = translateServerHudMode(hostSnapshot.mode());
-            String[] hostLines = {
-                I18n.get("zstdnet.hud.host.title", hostMode, hostSnapshot.listenHost(), hostSnapshot.listenPort()),
-                I18n.get("zstdnet.hud.server.zstd_rate", formatRate(hostSnapshot.zstdDownRate()), formatRate(hostSnapshot.zstdUpRate())),
-                I18n.get("zstdnet.hud.server.raw_rate", formatRate(hostSnapshot.rawDownRate()), formatRate(hostSnapshot.rawUpRate())),
-                I18n.get("zstdnet.hud.server.zstd_total", formatSize(hostSnapshot.zstdBytes())),
-                I18n.get("zstdnet.hud.server.raw_total", formatSize(hostSnapshot.rawBytes())),
-                I18n.get("zstdnet.hud.server.ratio", formatPercent(hostSnapshot.ratioPercent())),
-                I18n.get("zstdnet.hud.connections", hostSnapshot.connections())
-            };
-            y = renderHudPanel(gui, minecraft, y, hostLines, HUD_SERVER_BACKGROUND, HUD_SERVER_TITLE, HUD_SERVER_TEXT);
+            if (hudRefresh || cachedHostLines == null) {
+                String hostMode = translateServerHudMode(hostSnapshot.mode());
+                cachedHostLines = new String[]{
+                    I18n.get("zstdnet.hud.host.title", hostMode, hostSnapshot.listenHost(), hostSnapshot.listenPort()),
+                    I18n.get("zstdnet.hud.server.zstd_rate", formatRate(hostSnapshot.zstdDownRate()), formatRate(hostSnapshot.zstdUpRate())),
+                    I18n.get("zstdnet.hud.server.raw_rate", formatRate(hostSnapshot.rawDownRate()), formatRate(hostSnapshot.rawUpRate())),
+                    I18n.get("zstdnet.hud.server.zstd_total", formatSize(hostSnapshot.zstdBytes())),
+                    I18n.get("zstdnet.hud.server.raw_total", formatSize(hostSnapshot.rawBytes())),
+                    I18n.get("zstdnet.hud.server.ratio", formatPercent(hostSnapshot.ratioPercent())),
+                    I18n.get("zstdnet.hud.connections", hostSnapshot.connections())
+                };
+            }
+            y = renderHudPanel(gui, minecraft, y, cachedHostLines, HUD_SERVER_BACKGROUND, HUD_SERVER_TITLE, HUD_SERVER_TEXT);
+        } else {
+            cachedHostLines = null;
         }
 
         if (session != null) {
-            LocalZstdNet.StatsSnapshot stats = session.statsSnapshot();
-            String clientMode = translateClientHudMode(stats.mode());
-            String[] clientLines = {
-                I18n.get("zstdnet.hud.client.title", clientMode, stats.remoteHost(), stats.remotePort()),
-                I18n.get("zstdnet.hud.client.wire", formatRate(stats.wireUpRate()), formatRate(stats.wireDownRate())),
-                I18n.get("zstdnet.hud.client.raw", formatRate(stats.rawUpRate()), formatRate(stats.rawDownRate())),
-                I18n.get(
-                    "zstdnet.hud.total_ratio",
-                    formatSize(stats.wireUpBytes() + stats.wireDownBytes()),
-                    formatSize(stats.rawUpBytes() + stats.rawDownBytes()),
-                    formatPercent(stats.ratioPercent())
-                )
-            };
-            renderHudPanel(gui, minecraft, y, clientLines, HUD_CLIENT_BACKGROUND, HUD_CLIENT_TITLE, HUD_CLIENT_TEXT);
+            if (hudRefresh || cachedClientLines == null) {
+                LocalZstdNet.StatsSnapshot stats = session.statsSnapshot();
+                String clientMode = translateClientHudMode(stats.mode());
+                cachedClientLines = new String[]{
+                    I18n.get("zstdnet.hud.client.title", clientMode, stats.remoteHost(), stats.remotePort()),
+                    I18n.get("zstdnet.hud.client.wire", formatRate(stats.wireUpRate()), formatRate(stats.wireDownRate())),
+                    I18n.get("zstdnet.hud.client.raw", formatRate(stats.rawUpRate()), formatRate(stats.rawDownRate())),
+                    I18n.get(
+                        "zstdnet.hud.total_ratio",
+                        formatSize(stats.wireUpBytes() + stats.wireDownBytes()),
+                        formatSize(stats.rawUpBytes() + stats.rawDownBytes()),
+                        formatPercent(stats.ratioPercent())
+                    )
+                };
+            }
+            renderHudPanel(gui, minecraft, y, cachedClientLines, HUD_CLIENT_BACKGROUND, HUD_CLIENT_TITLE, HUD_CLIENT_TEXT);
+        } else {
+            cachedClientLines = null;
         }
     }
 
@@ -972,7 +992,7 @@ public final class ClientProxyPublisher {
             return bytes + " B";
         }
 
-        String[] units = {"KB", "MB", "GB", "TB"};
+        String[] units = SIZE_UNITS;
         double value = bytes / 1024.0D;
         int unit = 0;
         while (value >= 1024.0D && unit < units.length - 1) {

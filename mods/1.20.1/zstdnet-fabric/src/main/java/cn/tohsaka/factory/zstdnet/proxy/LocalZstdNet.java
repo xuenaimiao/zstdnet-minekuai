@@ -61,6 +61,8 @@ public final class LocalZstdNet {
     private static final ExecutorService WORKERS = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "zstdnet-worker-" + WORKER_SEQ.getAndIncrement());
         t.setDaemon(true);
+        // 后台压缩/转发线程降低优先级，CPU 紧张时让位给客户端渲染线程（不改变压缩 level）。
+        t.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 2));
         return t;
     });
 
