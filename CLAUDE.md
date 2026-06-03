@@ -17,29 +17,63 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is five parallel, independent mod projects,
-each with its own `build.gradle` / `settings.gradle` (there is no root settings.gradle):
+This is **not a single Gradle project**. It is five parallel, independent mod projects
+(each with its own `build.gradle` / `settings.gradle` — there is no root settings.gradle),
+plus a shared **`mods/common`** source-only module that is the single source of truth for the
+loader-agnostic core:
 
 ```
+mods/common                      single-source core (compiled into every variant)
 mods/1.20.1/zstdnet-forge        Forge 1.20.1        JDK 17
-mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17
+mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17  (reuses forge's integration layer)
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1       JDK 17
 mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1     JDK 21
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1       JDK 21
 ```
 
-All five share the same Java package `cn.tohsaka.factory.zstdnet` and **the core source
-is duplicated across all variants**. The bulk of the logic (`proxy/`, `server/`, `core/`,
-`client/`, `network/`, `coremod/` hooks) is intended to be identical everywhere — only the
-loader-integration layer differs. **When you change shared logic, apply the same change to
-every variant that contains that file** (often all 5). Do not assume editing one variant is
-enough.
+All variants share the Java package `cn.tohsaka.factory.zstdnet`. **The loader-agnostic core
+lives once in `mods/common`** — `core/`, `proxy/LocalZstdNet`, `proxy/AndroidZstdNativeLoader`,
+`server/ServerProxyRuntime`, `server/ServerProxyConfigFile`, `server/DedicatedServerAutoPort`,
+`ZstdServerList`, the `platform/` SPI, plus shared resources (lang files, Android `.so` natives)
+and the unit tests. Each variant's `build.gradle` pulls it in:
+
+```groovy
+sourceSets {
+    main { java.srcDir '../../common/src/main/java'; resources.srcDir '../../common/src/main/resources' }
+    test { java.srcDir '../../common/src/test/java' }
+}
+```
+
+so common is compiled inside each variant's own classpath + mappings (all three loaders use
+official Mojang mappings, so `net.minecraft.*` names match everywhere — this is why the core can
+be one shared copy). **Change shared logic once in `mods/common`; it propagates to every variant.**
+Only the thin loader-integration layer is per-variant. `mods/1.20.1/zstdnet-neoforge` additionally
+borrows forge-1.20.1's integration layer via `srcDir '../zstdnet-forge/src/main/java'` (NeoForge
+1.20.1 shares Forge's `net.minecraftforge.*` namespace), so it carries no Java of its own.
+
+The handful of loader-specific touch points the core needs are abstracted behind a tiny
+**Platform SPI** in `mods/common`: `platform/Platform` (interface) + `platform/Platforms` (holder)
++ `platform/DefaultPlatform` (fallback), exposing `configDir()`, `isClient()`, and
+`adjustHandshakeHostSuffix()` (Forge's `\0FML2\0` handshake marker). Each variant provides its
+implementation (`ForgePlatform` / `NeoForgePlatform` / `FabricPlatform`) and registers it as the
+first line of its `Zstdnet` main entry via `Platforms.set(...)`. To add a loader touch point to
+shared code, add a method to `Platform` and implement it in each variant rather than forking the
+core file.
+
+**Adding a new loader/version variant?** Follow `ADDING_A_VARIANT.md` — a step-by-step guide
+(fetch dep versions, scaffold the thin layer, wire to common, provide a `Platform` impl, fix the
+per-MC-version mixin/coremod targets, build & verify).
 
 `net/minecraft/...` at the repo root are clean modified-vanilla reference sources
 (`ShareToLanScreen`, `PublishCommand`) showing the intended screen/command modifications.
 They are not part of any build — treat them as reference only.
 
-## How loaders differ (the only place variants diverge)
+## How loaders differ (the per-variant integration layer)
+
+Everything a variant keeps for itself lives in its own `src/main/java`: `Zstdnet` (main entry,
+registers the Platform impl), `ClientConfig`, `client/ClientProxyPublisher`, `network/LanCompressionSync`,
+`server/ServerProxyBootstrap`, `coremod/*Hooks`, the `platform/*Platform` impl, and (Fabric only)
+`client/ZstdnetClient` + `mixin/*`. Everything else is shared from `mods/common`.
 
 The same three vanilla patch points are implemented two ways:
 
@@ -59,30 +93,35 @@ gate client init via `FMLEnvironment.dist`.
 
 ## Architecture (package `cn.tohsaka.factory.zstdnet`)
 
-- `Zstdnet` — main entry. Inits `ClientProxyPublisher` (client only), `LanCompressionSync`,
-  and `ServerProxyBootstrap`.
-- `proxy/LocalZstdNet` — **client-side local proxy**. Opens a local TCP listener, takes over
+Entries tagged **(common)** live once in `mods/common`; the rest are per-variant (see above).
+
+- `Zstdnet` — main entry. Registers the Platform impl (`Platforms.set(...)`), then inits
+  `ClientProxyPublisher` (client only), `LanCompressionSync`, and `ServerProxyBootstrap`.
+- `platform/` **(common)** — the **Platform SPI**: `Platform` interface, `Platforms` holder
+  (defaults to `DefaultPlatform`), abstracting `configDir()` / `isClient()` /
+  `adjustHandshakeHostSuffix()`. Each variant ships its own `*Platform` impl.
+- `proxy/LocalZstdNet` **(common)** — **client-side local proxy**. Opens a local TCP listener, takes over
   the connection, compresses client→server, and provides raw UDP passthrough on the same local
   port. Has `Mode` AUTO/RAW/ZSTD.
-- `server/ServerProxyRuntime` — **server-side proxy runtime** (the largest file, ~2.4k lines).
+- `server/ServerProxyRuntime` **(common)** — **server-side proxy runtime** (the largest file, ~2.4k lines).
   Listens on the entry port, does bidirectional forwarding (decompress client→backend, compress
   backend→client), rate limiting, anti-spam/ban, traffic stats, PROXY v2 real-IP restoration,
   voice UDP passthrough, and vanilla status-ping passthrough.
 - `server/ServerProxyBootstrap` — hooks the loader server lifecycle (started/stopping/tick/login)
   to start/stop the runtime.
-- `server/DedicatedServerAutoPort` — `auto_takeover`: reads `server.properties` `server-port`,
+- `server/DedicatedServerAutoPort` **(common)** — `auto_takeover`: reads `server.properties` `server-port`,
   keeps it as the public entry, and moves the backend Minecraft server to a free local port.
-- `server/ServerProxyConfigFile` — reads/writes the auto-maintained `zstdnet-server.properties`
+- `server/ServerProxyConfigFile` **(common)** — reads/writes the auto-maintained `zstdnet-server.properties`
   (rewritten with a commented template on change; supports hot reload).
 - `client/ClientProxyPublisher` — client runtime: leaves vanilla server entries untouched and
   swaps the connection target to the local proxy; registers `/zstdhud` and `/zstdport` commands;
   adds the Zstd-port field to the "Open to LAN" screen; renders the HUD.
 - `ClientConfig` — client TOML config (compression `level`).
 - `network/LanCompressionSync` — syncs LAN compression-threshold state.
-- `core/` — shared building blocks: `io/` (counting streams, `StreamTransfer`),
+- `core/` **(common)** — shared building blocks: `io/` (counting streams, `StreamTransfer`),
   `limit/TokenBucketLimiter` (rate limiting), `protocol/` (`VarIntCodec`/`VarIntRead`/`PacketIo`/
   `ByteArrayOps` — Minecraft packet framing), `stats/TrafficStats`.
-- `proxy/AndroidZstdNativeLoader` — loads bundled Android `.so` natives from
+- `proxy/AndroidZstdNativeLoader` **(common)** — loads bundled Android `.so` natives from
   `resources/zstdnet/android/<abi>/` (zstd-jni ships no Android natives), for Pojav/Android clients.
 
 Runtime config files live in Minecraft's `config/`: `zstdnet-client.toml` (client) and
@@ -115,9 +154,10 @@ deleted in favor of the all-in-one). The mod version is in each variant's `gradl
 
 ## Tests & regression
 
-- **Unit tests** (JUnit 5) under `src/test/java`: `ServerProxyRuntimeVoiceChatTest` (most
-  variants) and `LocalZstdNetUdpPassthroughTest` (neoforge 1.21.1). Run with the variant's
-  gradle: `gradle test` (single test: `gradle test --tests '*VoiceChatTest'`).
+- **Unit tests** (JUnit 5) now live once in `mods/common/src/test/java`
+  (`ServerProxyRuntimeVoiceChatTest`, `LocalZstdNetUdpPassthroughTest`) and run in every variant
+  via the shared `test` srcDir. Run with the variant's gradle: `gradle test` (single test:
+  `gradle test --tests '*VoiceChatTest'`).
 - **Full regression** (`scripts/`, run from the repo via the external gradle):
   - `scripts/run-regression.ps1 [-SkipBuild] [-SkipDedicated] [-SkipLan]` — builds all five
     variants, then runs dedicated-server startup verification and LAN regression verification.

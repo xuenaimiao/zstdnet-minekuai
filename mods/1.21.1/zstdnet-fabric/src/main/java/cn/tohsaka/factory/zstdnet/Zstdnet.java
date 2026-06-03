@@ -20,6 +20,8 @@
 package cn.tohsaka.factory.zstdnet;
 
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.platform.FabricPlatform;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.api.ModInitializer;
@@ -32,6 +34,7 @@ public final class Zstdnet implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        Platforms.set(new FabricPlatform());
         LanCompressionSync.init();
         ServerProxyBootstrap.init();
         LOGGER.info("zstdnet loaded");

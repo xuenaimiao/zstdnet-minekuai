@@ -21,15 +21,22 @@ base {
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
+// 复用 forge-1.20.1 的加载器集成层（NeoForge 1.20.1 与 Forge 同为 net.minecraftforge.* 命名），
+// 并接入 mods/common 单一真源核心。
 sourceSets {
     main {
         java {
             srcDir '../zstdnet-forge/src/main/java'
+            srcDir '../../common/src/main/java'
+        }
+        resources {
+            srcDir '../../common/src/main/resources'
         }
     }
     test {
         java {
             srcDir '../zstdnet-forge/src/test/java'
+            srcDir '../../common/src/test/java'
         }
     }
 }

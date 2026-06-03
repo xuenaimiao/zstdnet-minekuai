@@ -21,6 +21,8 @@ package cn.tohsaka.factory.zstdnet;
 
 import cn.tohsaka.factory.zstdnet.client.ClientProxyPublisher;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.platform.ForgePlatform;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.api.distmarker.Dist;
@@ -43,6 +45,7 @@ public class Zstdnet {
      * 模组加载时注册客户端与服务端功能。
      */
     public Zstdnet() {
+        Platforms.set(new ForgePlatform());
         if (FMLEnvironment.dist == Dist.CLIENT) {
             ClientProxyPublisher.init();
         }

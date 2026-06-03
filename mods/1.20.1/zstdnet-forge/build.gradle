@@ -8,6 +8,17 @@ plugins {
 version = mod_version
 group = mod_group_id
 
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译
+sourceSets {
+    main {
+        java.srcDir '../../common/src/main/java'
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
 jarJar.enable()
 
 def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile

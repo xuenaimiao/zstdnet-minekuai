@@ -21,6 +21,8 @@ package cn.tohsaka.factory.zstdnet;
 
 import cn.tohsaka.factory.zstdnet.client.ClientProxyPublisher;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.platform.NeoForgePlatform;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -45,6 +47,7 @@ public class Zstdnet {
      * 模组加载时注册客户端与服务端功能。
      */
     public Zstdnet(IEventBus modEventBus, ModContainer modContainer) {
+        Platforms.set(new NeoForgePlatform());
         LanCompressionSync.init(modEventBus);
         if (FMLEnvironment.dist == Dist.CLIENT) {
             ClientProxyPublisher.init(modContainer);
