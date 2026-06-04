@@ -326,6 +326,30 @@ mc.example.com:35565
   - 数字越大，压缩效果越好，但会占用更多 CPU
   - 一般设置 3-5 就足够了，平衡性能和压缩效果
 
+- `long_distance_matching`：是否启用长距离匹配，面向高重复服务器（默认：false）
+  - 压缩率更高，代价是每条连接多吃内存；默认关闭
+  - `window_log` ≤ 27 时对未升级的老客户端线兼容
+
+- `window_log`：LDM 窗口，取 2 的幂的指数（默认：0 = 保守默认 24，约 16MiB）
+  - 24≈16MiB，25≈32MiB，27≈128MiB（每方向每连接）
+  - 仅在 `long_distance_matching=true` 时生效；>27 需要客户端同步设置相同的 `window_log`
+
+- `dictionary_auto`：**一键全自动字典（推荐）**。设为 true 即可，其余全自动（默认：false）
+  - 服务端自动采样在线流量 → 累计约 32 次连接后自动后台训练 → 训练完自动启用并下发给玩家；无需再编辑文件、无需重启、无需手动分发
+  - 玩家首次进服自动下载字典并被提示重连一次，之后即享字典压缩
+  - 对登录初始的 registry/tag/recipe 爆发与海量小包提升最大
+  - 若显式设了下面的 `dictionary`，则以它为准
+
+- `dictionary`：（手动）训练字典文件名，位于 `config/zstdnet/dict/`（默认：空 = 不启用）
+  - 仅在你想固定指定某本字典时才用；否则优先用 `dictionary_auto`
+  - 玩家首次进服时自动下发（见「压缩调优与字典」一节）
+
+- `dictionary_capture`：（手动制作）把每条连接开头的数据采样到 `config/zstdnet/dict/samples/` 供训练（默认：false）
+  - `dictionary_auto=true` 时无需手动开；仅用于制作字典，采够样本后请关闭
+
+- `dictionary_train`：（手动制作）一次性训练。设为 true 并保存，用 `samples/` 训练出 `dict/trained.dict`（默认：false）
+  - 之后把 `dictionary` 改成 `trained.dict`、本项改回 false。`dictionary_auto=true` 时无需手动开
+
 - `max_conn_per_ip`：每个 IP 最多能同时连接的数量（默认：9999）
   - 设为 0 或负数表示不限制
   - 防止单个 IP 占用过多连接
@@ -391,6 +415,46 @@ mc.example.com:35565
 - `level`：客户端到服务端流的 Zstd 压缩级别（默认：3，范围：1-22）
   - 级别越高，压缩率越好，但 CPU 使用率也会增加
   - 建议在 3-5 之间选择，平衡压缩效果和性能
+
+- `long_distance_matching`：是否对「客户端→服务端」流启用 LDM（默认：false）
+- `window_log`：LDM 窗口指数（默认：0 = 保守默认 24）；仅当目标服务器也启用时才设 >27
+- `dictionary`：手动指定的字典文件，位于 `config/zstdnet/dict/`（默认：空）
+  - 通常不必填：连接使用字典的服务器时会自动下载字典
+
+## 压缩调优与字典
+
+以下选项全部 opt-in、默认关闭——默认配置与历史行为逐字节一致，并对未升级的客户端保持兼容。
+
+### 长距离匹配（LDM）
+对于「同样的大结构在几分钟内反复出现」的服务器（Create 系 / 大型整合包），在服务端设
+`long_distance_matching=true`（可再加 `window_log=25`）。`window_log` ≤ 27 时无需更新客户端即可解码。
+代价：每方向每连接约 `2^window_log` 字节内存，繁忙服务器会累加，故默认关闭。
+
+### 字典（零配置自动分发）
+训练字典对登录初始爆发（registry/tag/recipe）和大量相似小包（实体移动、方块更新）提升最大。
+
+**推荐——一个开关、全自动：** 在服务端设 `dictionary_auto=true`，配置到此结束。服务器随后自行：
+1. 后台采样每条连接开头的流量（每条连接会被切成多个小样本块——字典训练对样本「个数」有最低要求）；
+2. 仅需两三名玩家正常进服一次的样本量，即在后台线程训练出 `config/zstdnet/dict/trained.dict`；
+3. 把字典**热插启用（不断开任何在线连接）**，并下发给**所有在线玩家 + 新进玩家**——**无需第二次编辑、无需重启、无需手动分发字典。**
+
+拿到字典的玩家会被提示重连一次（清楚的游戏内提示），之后即享字典压缩；已有字典的玩家不会被踢。整个过程服务器照常运行（只是在短暂的「学习」阶段还没用字典压缩）。训练完成后字典永久生效。
+
+**不需要**七八个人反复进出服务器——正常第一场游戏里大家陆续登录就足以达到训练门槛。
+
+<details><summary>手动流程（进阶——仅当你想自己掌控训练时机）</summary>
+
+1. 设 `dictionary_capture=true`，让玩家连接一段时间（样本累积到 `config/zstdnet/dict/samples/`），再设回 false。
+2. 设 `dictionary_train=true` 并保存，生成 `config/zstdnet/dict/trained.dict`（也可用 `zstd --train` 命令行离线训练）。
+3. 设 `dictionary=trained.dict`、`dictionary_train=false`。
+
+</details>
+
+两种方式玩家都无需任何配置：进服后服务端会公告自己的字典；没有该字典的客户端会下载它（≤1 MB），缓存到
+`config/zstdnet/dict/auto/` 并记录到该服务器，然后被主动断开并提示重连。从下一次连接起，字典从第一帧就生效；
+之后再进服时已持有字典，直接以字典压缩连接、不再被踢。
+
+注意：若之后更换了服务器字典，缓存了旧字典的玩家可能需要删除一次 `config/zstdnet/dict/auto/` 才能恢复。
 
 ## 依赖
 

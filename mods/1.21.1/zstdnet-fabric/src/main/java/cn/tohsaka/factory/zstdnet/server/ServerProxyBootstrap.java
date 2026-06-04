@@ -21,6 +21,7 @@ package cn.tohsaka.factory.zstdnet.server;
 
 import cn.tohsaka.factory.zstdnet.coremod.ServerRealIpHooks;
 import cn.tohsaka.factory.zstdnet.mixin.ServerGamePacketListenerImplAccessor;
+import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -122,6 +123,13 @@ public final class ServerProxyBootstrap {
                 RUNTIME.stop();
                 RUNTIME.start(server.getPort());
             }
+            long dictRolloutId = RUNTIME.consumeDictionaryRolloutId();
+            if (dictRolloutId != 0L) {
+                for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                    DictionarySync.announce(player);
+                }
+                LOGGER.info("[zstdnet-server] dictionary_auto trained; rolled out to {} online player(s) now.", server.getPlayerList().getPlayerCount());
+            }
             syncServerHudSnapshot(server);
             return;
         }
@@ -215,6 +223,9 @@ public final class ServerProxyBootstrap {
         if (isLoopback(remoteAddress) || ServerRealIpHooks.isForwardedConnection(connection)) {
             if (activeLanPort > 0 && !connection.isMemoryConnection()) {
                 LanCompressionSync.requestCompressionUpgrade(player);
+            }
+            if (!connection.isMemoryConnection()) {
+                DictionarySync.announce(player);
             }
             return;
         }

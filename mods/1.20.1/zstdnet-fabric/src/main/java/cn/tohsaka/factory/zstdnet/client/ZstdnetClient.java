@@ -20,6 +20,7 @@
 package cn.tohsaka.factory.zstdnet.client;
 
 import cn.tohsaka.factory.zstdnet.ClientConfig;
+import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.api.ClientModInitializer;
@@ -32,6 +33,7 @@ public final class ZstdnetClient implements ClientModInitializer {
     public void onInitializeClient() {
         ClientConfig.init();
         LanCompressionSync.initClient();
+        DictionarySync.initClient();
         ClientProxyPublisher.init();
         LOGGER.info("zstdnet client loaded");
     }

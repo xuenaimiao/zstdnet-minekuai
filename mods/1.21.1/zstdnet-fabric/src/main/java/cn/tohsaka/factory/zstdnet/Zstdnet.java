@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet;
 
+import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
 import cn.tohsaka.factory.zstdnet.platform.FabricPlatform;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
@@ -36,6 +37,7 @@ public final class Zstdnet implements ModInitializer {
     public void onInitialize() {
         Platforms.set(new FabricPlatform());
         LanCompressionSync.init();
+        DictionarySync.init();
         ServerProxyBootstrap.init();
         LOGGER.info("zstdnet loaded");
     }

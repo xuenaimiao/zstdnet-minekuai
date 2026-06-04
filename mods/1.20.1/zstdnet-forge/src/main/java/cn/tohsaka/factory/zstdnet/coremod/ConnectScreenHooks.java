@@ -20,6 +20,9 @@
 package cn.tohsaka.factory.zstdnet.coremod;
 
 import cn.tohsaka.factory.zstdnet.ClientConfig;
+import cn.tohsaka.factory.zstdnet.core.compress.ClientDictionaryStore;
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.multiplayer.ServerData;
@@ -89,6 +92,8 @@ public final class ConnectScreenHooks {
         try {
             synchronized (LOCK) {
                 closeCurrentProxy();
+                CompressionOptions compression = ClientDictionaryStore.resolveFor(
+                    Platforms.get().configDir(), remoteAddr, ClientConfig.compression());
                 LocalZstdNet.ProxyHandle proxy = LocalZstdNet.start(
                     connectHost,
                     resolved.getPort(),
@@ -97,6 +102,7 @@ public final class ConnectScreenHooks {
                     connectHost,
                     resolved.getPort(),
                     ClientConfig.getLevel(),
+                    compression,
                     LocalZstdNet.Mode.ZSTD
                 );
                 currentProxy = proxy;

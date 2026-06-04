@@ -20,6 +20,9 @@
 package cn.tohsaka.factory.zstdnet.client;
 
 import cn.tohsaka.factory.zstdnet.ClientConfig;
+import cn.tohsaka.factory.zstdnet.core.compress.ClientDictionaryStore;
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.coremod.ConnectScreenHooks;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
@@ -592,6 +595,8 @@ public final class ClientProxyPublisher {
             synchronized (stateLock) {
                 closeActiveProxyLocked();
                 closeActiveSessionLocked();
+                CompressionOptions compression = ClientDictionaryStore.resolveFor(
+                    Platforms.get().configDir(), remoteAddr, ClientConfig.compression());
                 proxy = LocalZstdNet.start(
                     remote.connectHost(),
                     remote.connectPort(),
@@ -600,6 +605,7 @@ public final class ClientProxyPublisher {
                     remote.presentedHost(),
                     remote.presentedPort(),
                     ClientConfig.getLevel(),
+                    compression,
                     LocalZstdNet.Mode.ZSTD
                 );
                 activeProxy = proxy;

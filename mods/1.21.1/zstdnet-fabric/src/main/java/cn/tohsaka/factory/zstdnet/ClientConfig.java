@@ -19,7 +19,11 @@
 
 package cn.tohsaka.factory.zstdnet;
 
+import cn.tohsaka.factory.zstdnet.core.compress.ClientCompressionConfig;
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import com.mojang.logging.LogUtils;
 import net.fabricmc.loader.api.FabricLoader;
+import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,12 +34,15 @@ import java.util.Properties;
 
 /**
  * Client-side config used by the local publisher.
+ * <p>
+ * 解析逻辑统一委托到共享的 {@link ClientCompressionConfig}，本类只负责定位 config 目录与读写文件。
  */
 public final class ClientConfig {
-    private static final int DEFAULT_LEVEL = 3;
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("zstdnet-client.toml");
 
-    private static volatile int level = DEFAULT_LEVEL;
+    private static volatile int level = ClientCompressionConfig.DEFAULT_LEVEL;
+    private static volatile CompressionOptions compression = CompressionOptions.none();
     private static volatile boolean initialized;
 
     private ClientConfig() {
@@ -49,7 +56,9 @@ public final class ClientConfig {
             if (initialized) {
                 return;
             }
-            level = loadOrCreate();
+            ClientCompressionConfig.Parsed parsed = loadOrCreate();
+            level = parsed.level();
+            compression = parsed.compression();
             initialized = true;
         }
     }
@@ -61,46 +70,31 @@ public final class ClientConfig {
         return level;
     }
 
-    private static int loadOrCreate() {
+    public static CompressionOptions compression() {
+        if (!initialized) {
+            init();
+        }
+        return compression;
+    }
+
+    private static ClientCompressionConfig.Parsed loadOrCreate() {
+        ClientCompressionConfig.Parsed fallback = new ClientCompressionConfig.Parsed(ClientCompressionConfig.DEFAULT_LEVEL, CompressionOptions.none());
         try {
             Files.createDirectories(PATH.getParent());
             if (!Files.exists(PATH)) {
-                Files.writeString(PATH, defaultConfigBody(), StandardCharsets.UTF_8);
-                return DEFAULT_LEVEL;
+                Files.writeString(PATH, ClientCompressionConfig.defaultConfigBody(), StandardCharsets.UTF_8);
+                return fallback;
             }
         } catch (IOException ignored) {
-            return DEFAULT_LEVEL;
+            return fallback;
         }
 
         Properties properties = new Properties();
         try (InputStream input = Files.newInputStream(PATH)) {
             properties.load(input);
         } catch (IOException ignored) {
-            return DEFAULT_LEVEL;
-        }
-        return clamp(parseInt(properties.getProperty("level"), DEFAULT_LEVEL), 1, 22);
-    }
-
-    private static int parseInt(String raw, int fallback) {
-        if (raw == null || raw.isBlank()) {
             return fallback;
         }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
-    private static String defaultConfigBody() {
-        return """
-            # ZstdNet client config
-            # zstd compression level for the local client proxy
-            level=%d
-            """.formatted(DEFAULT_LEVEL);
+        return ClientCompressionConfig.parse(properties, PATH.getParent(), LOGGER);
     }
 }

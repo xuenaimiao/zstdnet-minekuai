@@ -323,6 +323,30 @@ Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP
   - Higher numbers mean better compression but use more CPU
   - Usually 3-5 is enough for a good balance of performance and compression
 
+- `long_distance_matching`：Enable long-distance matching for highly repetitive servers (default: false)
+  - Better ratio at the cost of extra per-connection memory; off by default
+  - With `window_log` ≤ 27 it stays wire-compatible with existing (un-updated) clients
+
+- `window_log`：LDM window as a power-of-two exponent (default: 0 = conservative 24, ~16MiB)
+  - 24≈16MiB, 25≈32MiB, 27≈128MiB of memory per direction per connection
+  - Only takes effect with `long_distance_matching=true`; values >27 require clients to enable a matching `window_log`
+
+- `dictionary_auto`：**One-switch, fully automatic dictionary (recommended).** Set to true and you are done (default: false)
+  - The server auto-samples live traffic, auto-trains once enough connections accumulate (~32), then auto-enables the dictionary and pushes it to players — no further file edits, no restart, no manual distribution
+  - Players auto-download it on first join and are asked to reconnect once; afterwards they enjoy dictionary compression
+  - Biggest win for the login registry/tag/recipe burst and streams of small packets
+  - Explicit `dictionary` below takes precedence if set
+
+- `dictionary`：(Manual) Trained dictionary file name under `config/zstdnet/dict/` (default: empty = off)
+  - Use this only if you want to pin a specific dictionary file; otherwise prefer `dictionary_auto`
+  - Automatically distributed to clients on first join (see "Compression Tuning & Dictionaries")
+
+- `dictionary_capture`：(Manual build) Sample connection-start traffic into `config/zstdnet/dict/samples/` for training (default: false)
+  - Not needed when `dictionary_auto=true`; turn it off once you have collected enough samples
+
+- `dictionary_train`：(Manual build) One-shot training. Set to true and save to train `dict/trained.dict` from `samples/` (default: false)
+  - Afterwards set `dictionary=trained.dict`, `dictionary_train=false`. Not needed when `dictionary_auto=true`
+
 - `max_conn_per_ip`：Maximum simultaneous connections per IP (default: 9999)
   - Set to 0 or negative to disable limit
   - Prevents a single IP from using too many connections
@@ -388,6 +412,42 @@ Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP
 - `level`：Zstd compression level for client->server stream (default: 3, range: 1-22)
   - Higher levels provide better compression but increase CPU usage
   - It is recommended to choose between 3-5 to balance compression effect and performance
+
+- `long_distance_matching`：Enable LDM for the client->server stream (default: false)
+- `window_log`：LDM window exponent (default: 0 = conservative 24); only set >27 if the target server uses it too
+- `dictionary`：Manual dictionary file under `config/zstdnet/dict/` (default: empty)
+  - Usually unnecessary: dictionaries are auto-downloaded from servers that use them
+
+## Compression Tuning & Dictionaries
+
+All of the options below are opt-in and off by default — the defaults keep the exact original behavior and stay compatible with un-updated clients.
+
+### Long-distance matching (LDM)
+For servers where the same large structures repeat over minutes (Create-based / large modpacks), set `long_distance_matching=true` (optionally `window_log=25`) on the server. With `window_log` ≤ 27 this is decodable by existing clients with no client update. Cost: roughly `2^window_log` bytes of memory per direction per connection, which adds up on a busy server — hence off by default.
+
+### Dictionaries (zero-config auto-distribution)
+A trained ZSTD dictionary gives the biggest gain for the login burst (registry/tags/recipes) and for streams of small, similar packets (entity moves, block updates).
+
+**Recommended — one switch, fully automatic:** set `dictionary_auto=true` on the server. That's the whole setup. The server then, on its own:
+1. samples live connection-start traffic in the background (each connection is split into several small chunk-samples, since dictionary training needs a minimum number of samples),
+2. after just a couple of player connections' worth of samples, trains `config/zstdnet/dict/trained.dict` on a background thread,
+3. enables the dictionary **live (hot-swapped, without disconnecting any current session)** and pushes it to **all online players plus new joiners** — no second edit, no restart, no manual file distribution.
+
+Players who receive the dictionary are asked to reconnect once (a clear in-game message); from then on they are dictionary-compressed. Players who already have it are not kicked. The server keeps running normally the whole time (it just isn't dictionary-compressing yet during the short learning phase). Once trained, the dictionary is permanent and used for every later connection.
+
+You do **not** need 7-8 people to repeatedly join and leave — normal first-session joins are enough to reach the training threshold.
+
+<details><summary>Manual workflow (advanced — only if you want to control training explicitly)</summary>
+
+1. Set `dictionary_capture=true`, let players connect for a while (samples accumulate in `config/zstdnet/dict/samples/`), then set `dictionary_capture=false`.
+2. Set `dictionary_train=true` and save — `config/zstdnet/dict/trained.dict` is produced (or train externally with the `zstd --train` CLI).
+3. Set `dictionary=trained.dict` and `dictionary_train=false`.
+
+</details>
+
+Players need no setup in either case. When they join, the server announces its dictionary; a client that does not yet have it downloads it (≤1 MB), caches it under `config/zstdnet/dict/auto/`, maps it to that server, and is disconnected once with a message asking it to rejoin. From the next connection the dictionary is used from the very first packet. Later joins already have it and connect dictionary-compressed with no kick.
+
+Note: if you later change the server's dictionary, players who cached the old one may need to delete `config/zstdnet/dict/auto/` once to recover.
 
 ## Dependencies
 

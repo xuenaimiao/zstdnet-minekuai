@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet.server;
 
+import cn.tohsaka.factory.zstdnet.core.compress.DictionaryFiles;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 
 import java.io.IOException;
@@ -52,6 +53,12 @@ public final class ServerProxyConfigFile {
         "voice_chat_listen",
         "voice_chat_target",
         "level",
+        "long_distance_matching",
+        "window_log",
+        "dictionary",
+        "dictionary_auto",
+        "dictionary_capture",
+        "dictionary_train",
         "max_conn_per_ip",
         "max_req_per_window",
         "request_window",
@@ -71,6 +78,45 @@ public final class ServerProxyConfigFile {
 
     public static Path path() {
         return Platforms.get().configDir().resolve("zstdnet-server.properties");
+    }
+
+    /** 自动模式下训练产物的固定文件名。 */
+    public static final String AUTO_TRAINED_DICT = "trained.dict";
+
+    /**
+     * 解析「当前实际生效的字典文件名」：显式 {@code dictionary=} 优先；否则当 {@code dictionary_auto=true}
+     * 且已训练出 {@code trained.dict} 时回退到它。两处读字典的地方（运行时压缩 + play 阶段下发）都走这里，避免漂移。
+     *
+     * @return 字典文件名；都没有时返回空串
+     */
+    public static String resolveDictionaryName(Properties props, Path configDir) {
+        String name = props.getProperty("dictionary", "").trim();
+        if (!name.isEmpty()) {
+            return name;
+        }
+        boolean auto = Boolean.parseBoolean(props.getProperty("dictionary_auto", "false").trim());
+        if (auto && Files.isRegularFile(DictionaryFiles.dictDir(configDir).resolve(AUTO_TRAINED_DICT))) {
+            return AUTO_TRAINED_DICT;
+        }
+        return "";
+    }
+
+    /**
+     * 读取服务端当前实际生效的字典字节（供 play 阶段向客户端自动下发）。自动模式下训练完成后会自动返回 {@code trained.dict}。
+     *
+     * @return 字典字节；未配置或读取失败时返回 null
+     */
+    public static byte[] loadDictionaryBytes() {
+        Path configDir = path().getParent();
+        String name = resolveDictionaryName(loadProperties(), configDir);
+        if (name.isEmpty()) {
+            return null;
+        }
+        try {
+            return DictionaryFiles.load(configDir, name);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     public static int readListenPort() {
@@ -197,6 +243,12 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("voice_chat_listen", DEFAULT_VOICE_CHAT_LISTEN);
         props.putIfAbsent("voice_chat_target", defaultVoiceChatTarget());
         props.putIfAbsent("level", "9");
+        props.putIfAbsent("long_distance_matching", "false");
+        props.putIfAbsent("window_log", "0");
+        props.putIfAbsent("dictionary", "");
+        props.putIfAbsent("dictionary_auto", "false");
+        props.putIfAbsent("dictionary_capture", "false");
+        props.putIfAbsent("dictionary_train", "false");
         props.putIfAbsent("max_conn_per_ip", "9999");
         props.putIfAbsent("max_req_per_window", "50");
         props.putIfAbsent("request_window", "10s");
@@ -290,6 +342,42 @@ public final class ServerProxyConfigFile {
 
         appendLine(builder, "# zstd 压缩等级（1-22，通常建议 3-9）。", lineSeparator);
         appendLine(builder, "level=" + props.getProperty("level"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 长距离匹配（LDM）：面向“同样的大结构在几分钟内反复出现”的高重复场景，", lineSeparator);
+        appendLine(builder, "# 用更大的窗口捕捉默认窗口之外的重复，进一步降低带宽。默认关闭。", lineSeparator);
+        appendLine(builder, "# 代价：每条连接、每个方向会多吃约 (2^window_log) 字节内存（见下），多人时在服务端累加。", lineSeparator);
+        appendLine(builder, "long_distance_matching=" + props.getProperty("long_distance_matching"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# LDM 窗口大小，取 2 的幂的指数：0=保守默认(24≈16MiB)，24≈16MiB，25≈32MiB，27≈128MiB。", lineSeparator);
+        appendLine(builder, "# 仅在 long_distance_matching=true 时生效。<=27 的帧任何客户端都能解码，对现有客户端线兼容；", lineSeparator);
+        appendLine(builder, "# >27 需要客户端同步开启 long_distance_matching/window_log，否则会解码失败。", lineSeparator);
+        appendLine(builder, "window_log=" + props.getProperty("window_log"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# ===== 字典（开启可显著提升压缩率，全部默认关闭）=====", lineSeparator);
+        appendLine(builder, "# 【推荐·一键全自动】dictionary_auto=true：服务器自动采样在线流量→样本够了自动后台训练→", lineSeparator);
+        appendLine(builder, "# 训练完把字典「热插」启用（不断开任何在线连接），并下发给所有在线+新玩家。全程只改这一行，", lineSeparator);
+        appendLine(builder, "# 无需再编辑文件、无需重启、无需手动分发。玩家拿到字典后被提示重连一次即享字典压缩。", lineSeparator);
+        appendLine(builder, "# 通常两三名玩家正常进服一次即可达到训练门槛（无需任何人反复进出）；产物为 config/zstdnet/dict/trained.dict。", lineSeparator);
+        appendLine(builder, "dictionary_auto=" + props.getProperty("dictionary_auto"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 【手动】指定训练字典文件名（相对 config/zstdnet/dict/ 目录，或绝对路径）。留空=不用字典。", lineSeparator);
+        appendLine(builder, "# 显式设置时优先于 dictionary_auto。字典对“登录 registry/tag/recipe 爆发”和“海量小包”提升最大。", lineSeparator);
+        appendLine(builder, "# 用了不同字典的客户端会被拒绝；服务端会自动把字典下发给玩家，一般无需手动分发。", lineSeparator);
+        appendLine(builder, "dictionary=" + props.getProperty("dictionary"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 【手动制作-采样】开启后把每条连接开头的下行数据采样到 config/zstdnet/dict/samples/，", lineSeparator);
+        appendLine(builder, "# 供训练字典使用（有大小上限，制作完请关闭）。dictionary_auto=true 时无需手动开这个。默认关闭。", lineSeparator);
+        appendLine(builder, "dictionary_capture=" + props.getProperty("dictionary_capture"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 【手动制作-训练】设为 true 并保存，会用 samples/ 里的语料训练出 dict/trained.dict，", lineSeparator);
+        appendLine(builder, "# 然后把 dictionary 改成 trained.dict、本项改回 false 即可启用。dictionary_auto=true 时无需手动开。默认关闭。", lineSeparator);
+        appendLine(builder, "dictionary_train=" + props.getProperty("dictionary_train"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# 单个 IP 的最大并发连接数。0 表示不限制。", lineSeparator);

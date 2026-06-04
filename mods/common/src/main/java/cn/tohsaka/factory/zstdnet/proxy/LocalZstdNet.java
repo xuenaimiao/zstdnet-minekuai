@@ -19,6 +19,8 @@
 
 package cn.tohsaka.factory.zstdnet.proxy;
 
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.io.StreamTransfer;
 import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
 import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
@@ -77,7 +79,7 @@ public final class LocalZstdNet {
     }
 
     public static ProxyHandle start(String remoteHost, int remotePort, int level, Mode requestedMode) throws IOException {
-        return start(remoteHost, remotePort, remoteHost, remotePort, remoteHost, remotePort, level, requestedMode);
+        return start(remoteHost, remotePort, remoteHost, remotePort, remoteHost, remotePort, level, CompressionOptions.none(), requestedMode);
     }
 
     public static ProxyHandle start(
@@ -88,7 +90,7 @@ public final class LocalZstdNet {
         int level,
         Mode requestedMode
     ) throws IOException {
-        return start(remoteHost, remotePort, remoteHost, remotePort, presentedHost, presentedPort, level, requestedMode);
+        return start(remoteHost, remotePort, remoteHost, remotePort, presentedHost, presentedPort, level, CompressionOptions.none(), requestedMode);
     }
 
     public static ProxyHandle start(
@@ -101,6 +103,21 @@ public final class LocalZstdNet {
         int level,
         Mode requestedMode
     ) throws IOException {
+        return start(remoteHost, remotePort, statusHost, statusPort, presentedHost, presentedPort, level, CompressionOptions.none(), requestedMode);
+    }
+
+    public static ProxyHandle start(
+        String remoteHost,
+        int remotePort,
+        String statusHost,
+        int statusPort,
+        String presentedHost,
+        int presentedPort,
+        int level,
+        CompressionOptions compression,
+        Mode requestedMode
+    ) throws IOException {
+        CompressionOptions options = compression == null ? CompressionOptions.none() : compression;
         ServerSocket listener = new ServerSocket();
         listener.bind(new InetSocketAddress("127.0.0.1", 0));
 
@@ -119,7 +136,7 @@ public final class LocalZstdNet {
         AtomicBoolean running = new AtomicBoolean(true);
         ProxyStats stats = new ProxyStats();
         Thread acceptThread = new Thread(
-            () -> acceptLoop(listener, running, remoteHost, remotePort, statusHost, statusPort, presentedHost, presentedPort, level, resolvedMode, stats),
+            () -> acceptLoop(listener, running, remoteHost, remotePort, statusHost, statusPort, presentedHost, presentedPort, level, options, resolvedMode, stats),
             "zstdnet-accept-" + ACCEPT_SEQ.getAndIncrement() + "-" + remoteHost + ":" + remotePort
         );
         acceptThread.setDaemon(true);
@@ -200,6 +217,7 @@ public final class LocalZstdNet {
         String presentedHost,
         int presentedPort,
         int level,
+        CompressionOptions compression,
         Mode mode,
         ProxyStats stats
     ) {
@@ -229,6 +247,7 @@ public final class LocalZstdNet {
                     presentedHost,
                     presentedPort,
                     level,
+                    compression,
                     mode,
                     stats
                 ));
@@ -252,6 +271,7 @@ public final class LocalZstdNet {
         String presentedHost,
         int presentedPort,
         int level,
+        CompressionOptions compression,
         Mode mode,
         ProxyStats stats
     ) {
@@ -294,7 +314,7 @@ public final class LocalZstdNet {
             if (mode == Mode.RAW) {
                 handleRawConnection(localClient, remoteHost, remotePort, rewrittenHandshake, stats);
             } else {
-                handleZstdConnection(localClient, remoteHost, remotePort, level, rewrittenHandshake, stats);
+                handleZstdConnection(localClient, remoteHost, remotePort, level, compression, rewrittenHandshake, stats);
             }
         } catch (Exception e) {
             LOGGER.warn(
@@ -373,10 +393,14 @@ public final class LocalZstdNet {
         String remoteHost,
         int remotePort,
         int level,
+        CompressionOptions compression,
         byte[] firstPacket,
         ProxyStats stats
     ) throws Exception {
         AndroidZstdNativeLoader.prepare(LOGGER);
+        CompressionOptions options = compression == null ? CompressionOptions.none() : compression;
+        // 下行解压用本端配置的同一本字典：服务端会回显客户端在上行“亮明”的字典（见 ServerProxyRuntime 协商）。
+        byte[] clientDict = options.hasDictionary() ? options.dictionary() : null;
         try (Socket client = localClient; Socket upstream = new Socket()) {
             LOGGER.info(
                 "zstdnet: opening ZSTD upstream {} -> {}:{} level {}",
@@ -395,11 +419,12 @@ public final class LocalZstdNet {
             );
 
             Future<?> upstreamWriter = WORKERS.submit(() -> {
-                try (ZstdOutputStream zstdOut = new ZstdOutputStream(
+                try (ZstdOutputStream zstdOut = ZstdStreams.newCompressor(
                     new CountingOutputStream(upstream.getOutputStream(), stats::addClientToServerZstd),
-                    level
+                    level,
+                    options,
+                    options.hasDictionary()
                 )) {
-                    zstdOut.setCloseFrameOnFlush(false);
                     OutputStream countedRawOut = new CountingOutputStream(zstdOut, stats::addClientToServerRaw);
                     PacketIo.writePacket(countedRawOut, firstPacket);
                     countedRawOut.flush();
@@ -414,8 +439,10 @@ public final class LocalZstdNet {
             });
 
             Future<?> downstreamWriter = WORKERS.submit(() -> {
-                try (ZstdInputStream zstdIn = new ZstdInputStream(
-                    new CountingInputStream(upstream.getInputStream(), stats::addServerToClientZstd)
+                try (ZstdInputStream zstdIn = ZstdStreams.newDecompressor(
+                    new CountingInputStream(upstream.getInputStream(), stats::addServerToClientZstd),
+                    options,
+                    clientDict
                 )) {
                     StreamTransfer.copyAndFlush(zstdIn, new CountingOutputStream(client.getOutputStream(), stats::addServerToClientRaw));
                 } catch (Exception ignored) {

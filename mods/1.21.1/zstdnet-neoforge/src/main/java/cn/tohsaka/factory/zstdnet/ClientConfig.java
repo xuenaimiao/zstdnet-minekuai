@@ -19,7 +19,12 @@
 
 package cn.tohsaka.factory.zstdnet;
 
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.core.compress.DictionaryFiles;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
+import com.mojang.logging.LogUtils;
 import net.neoforged.neoforge.common.ModConfigSpec;
+import org.slf4j.Logger;
 
 /**
  * Client-side config used by the local publisher.
@@ -27,7 +32,11 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 public final class ClientConfig {
     public static final ModConfigSpec SPEC;
 
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final ModConfigSpec.IntValue LEVEL;
+    private static final ModConfigSpec.BooleanValue LONG_DISTANCE_MATCHING;
+    private static final ModConfigSpec.IntValue WINDOW_LOG;
+    private static final ModConfigSpec.ConfigValue<String> DICTIONARY;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -35,6 +44,15 @@ public final class ClientConfig {
         LEVEL = builder
             .comment("zstd compression level for client->server stream")
             .defineInRange("level", 3, 1, 22);
+        LONG_DISTANCE_MATCHING = builder
+            .comment("Enable long-distance matching (better ratio on repetitive servers, more memory). Default off.")
+            .define("long_distance_matching", false);
+        WINDOW_LOG = builder
+            .comment("LDM window as a power-of-two exponent. 0 = conservative default (24). Only >27 requires the server to use it too.")
+            .defineInRange("window_log", 0, 0, 31);
+        DICTIONARY = builder
+            .comment("Trained dictionary file under config/zstdnet/dict/ (or absolute path). Empty = off. Must match the server's dictionary.")
+            .define("dictionary", "");
 
         SPEC = builder.build();
     }
@@ -44,5 +62,20 @@ public final class ClientConfig {
 
     public static int getLevel() {
         return LEVEL.get();
+    }
+
+    public static CompressionOptions compression() {
+        boolean ldm = LONG_DISTANCE_MATCHING.get();
+        int windowLog = WINDOW_LOG.get();
+        String dictName = DICTIONARY.get();
+        byte[] dictionary = null;
+        if (dictName != null && !dictName.isBlank()) {
+            try {
+                dictionary = DictionaryFiles.load(Platforms.get().configDir(), dictName);
+            } catch (Exception ex) {
+                LOGGER.error("[zstdnet-client] failed to load dictionary '{}'; continuing without it: {}", dictName, ex.toString());
+            }
+        }
+        return CompressionOptions.of(ldm, windowLog, dictionary);
     }
 }

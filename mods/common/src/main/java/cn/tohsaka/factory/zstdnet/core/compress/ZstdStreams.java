@@ -1,0 +1,113 @@
+/*
+ * Copyright (c) 2026 wish
+ *
+ * This file is part of ZstdNet.
+ *
+ * ZstdNet is free software: you can redistribute it and/or modify
+ * it under the terms of the MIT License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ZstdNet is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MIT License for more details.
+ *
+ * You should have received a copy of the MIT License
+ * along with ZstdNet. If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+package cn.tohsaka.factory.zstdnet.core.compress;
+
+import com.github.luben.zstd.Zstd;
+import com.github.luben.zstd.ZstdInputStream;
+import com.github.luben.zstd.ZstdOutputStream;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PushbackInputStream;
+import java.util.Arrays;
+
+/**
+ * 集中封装 zstd-jni 流的构造与帧探测，使 LDM / 字典 等高级参数只在一处落地，便于测试与复用。
+ * <p>
+ * 所有方法在 {@link CompressionOptions#none()} 下退化为与历史一致的纯流式压缩（持续帧、无附加参数）。
+ */
+public final class ZstdStreams {
+    /**
+     * 探测 ZSTD 帧头里的 dict id 所需读取的字节数。
+     * 帧头中 dict id 字段最远落在 magic(4)+FHD(1)+window(1)+dictId(4)=10 字节内，留余量取 18。
+     */
+    public static final int FRAME_DICT_ID_PEEK = 18;
+
+    private ZstdStreams() {
+    }
+
+    /**
+     * 构造压缩流：持续帧（{@code setCloseFrameOnFlush(false)}）+ 可选 LDM + 可选字典。
+     *
+     * @param out           调用方已包好的（通常是计数）输出流
+     * @param level         ZSTD 压缩等级
+     * @param options       附加参数；null 等价于 {@link CompressionOptions#none()}
+     * @param useDictionary 本方向是否使用字典（由上层协商结果决定）
+     */
+    public static ZstdOutputStream newCompressor(OutputStream out, int level, CompressionOptions options, boolean useDictionary) throws IOException {
+        ZstdOutputStream zstdOut = new ZstdOutputStream(out, level);
+        zstdOut.setCloseFrameOnFlush(false);
+        if (options != null && options.longDistanceMatching()) {
+            zstdOut.setLong(options.effectiveWindowLog());
+        }
+        if (useDictionary && options != null && options.hasDictionary()) {
+            zstdOut.setDict(options.dictionary());
+        }
+        return zstdOut;
+    }
+
+    /**
+     * 构造解压流：可选放开大窗口上限 + 可选字典。
+     *
+     * @param in         调用方已包好的（通常是计数）输入流
+     * @param options    附加参数；仅当本端 windowLog &gt; 27 才会抬高解码窗口上限
+     * @param dictionary 解压所需字典；null 表示无字典（与无字典帧匹配）
+     */
+    public static ZstdInputStream newDecompressor(InputStream in, CompressionOptions options, byte[] dictionary) throws IOException {
+        ZstdInputStream zstdIn = new ZstdInputStream(in);
+        if (options != null && options.decompressWindowLogMax() > CompressionOptions.DEFAULT_DECOMPRESS_WINDOW_LOG_MAX) {
+            zstdIn.setLongMax(options.decompressWindowLogMax());
+        }
+        if (dictionary != null && dictionary.length > 0) {
+            zstdIn.setDict(dictionary);
+        }
+        return zstdIn;
+    }
+
+    /**
+     * 探测 {@code in} 中下一个 ZSTD 帧头里的 dict id，并把读到的字节全部退回（不消费）。
+     *
+     * @return 帧使用的字典 id；0 表示无字典 / 读取不足 / 非 zstd 帧
+     */
+    public static long peekFrameDictId(PushbackInputStream in) throws IOException {
+        byte[] head = new byte[FRAME_DICT_ID_PEEK];
+        int read = 0;
+        while (read < head.length) {
+            int n = in.read(head, read, head.length - read);
+            if (n < 0) {
+                break;
+            }
+            read += n;
+        }
+        if (read == 0) {
+            return 0L;
+        }
+        long dictId;
+        try {
+            dictId = Zstd.getDictIdFromFrame(read == head.length ? head : Arrays.copyOf(head, read));
+        } catch (Throwable ignored) {
+            // getDictIdFromFrame 在字节不足/非 zstd 帧时已返回 0；此处仅兜底原生异常。
+            dictId = 0L;
+        }
+        in.unread(head, 0, read);
+        return dictId;
+    }
+}

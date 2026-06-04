@@ -19,6 +19,11 @@
 
 package cn.tohsaka.factory.zstdnet.server;
 
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.core.compress.DictionaryFiles;
+import cn.tohsaka.factory.zstdnet.core.compress.DictionarySampler;
+import cn.tohsaka.factory.zstdnet.core.compress.DictionaryTrainer;
+import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.io.CountingInputStream;
 import cn.tohsaka.factory.zstdnet.core.io.CountingOutputStream;
 import cn.tohsaka.factory.zstdnet.core.limit.TokenBucketLimiter;
@@ -47,6 +52,7 @@ import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -71,6 +77,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -105,6 +112,16 @@ final class ServerProxyRuntime {
     private static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ZERO;
     private static final String DEFAULT_TRUSTED_PROXY_IPS = "127.0.0.1,::1,0:0:0:0:0:0:0:1";
     private static final int CLIENT_PEEK_BUFFER = 4096;
+    /**
+     * dictionary_auto：累计采到这么多个「样本块」后自动训练。
+     * <p>采样器把每条连接切成多个 16KB 块（见 {@link DictionarySampler}），所以这是块数不是人数——
+     * 大整合包一名玩家登录就产好几个块，通常两三名玩家正常进服一次即可达标，无需任何人反复进出。
+     */
+    private static final int AUTO_TRAIN_MIN_SAMPLES = 16;
+    /** dictionary_auto：自动训练目标字典大小（ZDICT 会按实际语料自动收缩，故对小服也安全）。 */
+    private static final int AUTO_TRAIN_DICT_BYTES = 64 * 1024;
+    /** dictionary_auto：后台轮询间隔（秒）。 */
+    private static final long AUTO_TRAIN_POLL_SECONDS = 30L;
     private static final int MAX_HANDSHAKE_PACKET_SIZE = 2048;
     private static final int MAX_PROXY_V2_PAYLOAD_SIZE = 216;
 
@@ -117,7 +134,15 @@ final class ServerProxyRuntime {
     private ScheduledExecutorService statsTicker;
     private FloodGuard guard;
     private TrafficStats stats;
-    private ProxyConfig cfg;
+    private volatile ProxyConfig cfg;
+    private volatile DictionarySampler dictionarySampler;
+    /** dictionary_auto 模式的后台「采样够了就训练」轮询器。 */
+    private ScheduledExecutorService autoDictWatcher;
+    /**
+     * 自动训练完成、字典已热插进运行时后置为该字典 id（非 0）。per-variant 的 ServerProxyBootstrap 在 tick 里
+     * {@link #consumeDictionaryRolloutId()} 取走它，向所有在线玩家广播下发，使在线玩家也立即拿到字典并重连生效。
+     */
+    private volatile long dictionaryRolloutId;
     private TokenBucketLimiter globalLimiter;
     private RuntimeMode runtimeMode;
     private volatile HudSnapshot latestHudSnapshot;
@@ -288,6 +313,7 @@ final class ServerProxyRuntime {
                 return;
             }
             running = false;
+            stopAutoDictWatcher();
             stopUdpForwarders();
             closeQuietly(listener);
             listener = null;
@@ -346,6 +372,18 @@ final class ServerProxyRuntime {
         return current > 0L && current != loadedConfigLastModified;
     }
 
+    /**
+     * 取走「自动训练刚完成、字典已热插」的待广播 dict id（取后清零）；无则返回 0。
+     * 由 per-variant 的服务器 tick 调用，向所有在线玩家广播字典下发。
+     */
+    public long consumeDictionaryRolloutId() {
+        long id = dictionaryRolloutId;
+        if (id != 0L) {
+            dictionaryRolloutId = 0L;
+        }
+        return id;
+    }
+
     private void acceptLoop() {
         while (running) {
             try {
@@ -367,6 +405,12 @@ final class ServerProxyRuntime {
      * 处理单个客户端连接，建立到后端连接后执行双向转发。
      */
     private void handleClient(Socket client) {
+        // 快照当前配置：dictionary_auto 训练完成会原子替换 this.cfg（热插字典），快照确保本连接全程读到一致的一份。
+        final ProxyConfig cfg = this.cfg;
+        if (cfg == null) {
+            closeSocket(client);
+            return;
+        }
         stats.addConn(1);
         String remoteIp = sourceIp(client.getRemoteSocketAddress());
         String guardIp = remoteIp;
@@ -416,10 +460,36 @@ final class ServerProxyRuntime {
                     return;
                 }
 
+                // 字典隐式协商：仅当服务端加载了字典时才探测客户端首帧的 dict id。
+                // 默认（无字典）下此分支完全不触发，连接建立路径与历史逐字节一致。
+                byte[] decompressDict = null;     // client -> backend 解压所用字典
+                boolean compressWithDict = false; // backend -> client 是否回显字典压缩
+                if (cfg.compression.hasDictionary()) {
+                    long clientDictId = ZstdStreams.peekFrameDictId(pushIn);
+                    if (clientDictId != 0L) {
+                        if (clientDictId == cfg.compression.dictionaryId()) {
+                            // 客户端用我方字典亮明能力 -> 上行用它解压，下行回显同一字典压缩。
+                            decompressDict = cfg.compression.dictionary();
+                            compressWithDict = true;
+                        } else {
+                            // 客户端用的是另一本字典：我方无法解码其上行，也无法压出它能读的下行，只能关闭。
+                            LOGGER.warn(
+                                "[server] client {} advertised dictionary id {} not matching server dictionary id {}; closing connection",
+                                guardIp,
+                                clientDictId,
+                                cfg.compression.dictionaryId()
+                            );
+                            return;
+                        }
+                    }
+                }
+
                 final String backendSourceIp = forwardedSourceIp;
+                final byte[] upstreamDict = decompressDict;
+                final boolean downstreamDict = compressWithDict;
                 Future<Exception> c2s = workers.submit(() -> {
                     try {
-                        forwardDecompress(upstream, pushIn, stats, backendSourceIp);
+                        forwardDecompress(upstream, pushIn, stats, backendSourceIp, cfg.compression, upstreamDict);
                         return null;
                     } catch (Exception ex) {
                         return ex;
@@ -430,7 +500,7 @@ final class ServerProxyRuntime {
 
                 Future<Exception> s2c = workers.submit(() -> {
                     try {
-                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter);
+                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict);
                         return null;
                     } catch (Exception ex) {
                         return ex;
@@ -585,8 +655,8 @@ final class ServerProxyRuntime {
     /**
      * Client -> backend: decompress zstd traffic before forwarding to Minecraft.
      */
-    private void forwardDecompress(Socket dst, InputStream src, TrafficStats stats, String sourceIp) throws IOException {
-        try (ZstdInputStream zstdIn = new ZstdInputStream(new CountingInputStream(src, stats::addZstdUp))) {
+    private void forwardDecompress(Socket dst, InputStream src, TrafficStats stats, String sourceIp, CompressionOptions options, byte[] dictionary) throws IOException {
+        try (ZstdInputStream zstdIn = ZstdStreams.newDecompressor(new CountingInputStream(src, stats::addZstdUp), options, dictionary)) {
             OutputStream dstOut = dst.getOutputStream();
             byte[] firstPacket = PacketIo.readPacket(zstdIn);
             if (firstPacket.length > 0) {
@@ -702,11 +772,14 @@ final class ServerProxyRuntime {
         Duration flushInterval,
         TrafficStats stats,
         TokenBucketLimiter perConnLimiter,
-        TokenBucketLimiter globalLimiter
+        TokenBucketLimiter globalLimiter,
+        CompressionOptions options,
+        boolean useDictionary
     ) throws IOException {
         OutputStream limitedDst = new RateLimitedOutputStream(dst, perConnLimiter, globalLimiter);
-        try (ZstdOutputStream zstdOut = new ZstdOutputStream(new CountingOutputStream(limitedDst, stats::addZstdDown), level)) {
-            zstdOut.setCloseFrameOnFlush(false);
+        DictionarySampler sampler = this.dictionarySampler;
+        DictionarySampler.Collector sampleCollector = sampler != null ? sampler.newCollector() : null;
+        try (ZstdOutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary)) {
             InputStream srcIn = src.getInputStream();
             byte[] buf = new byte[16 * 1024];
             final long flushIntervalNs = Math.max(0L, flushInterval.toNanos());
@@ -754,6 +827,9 @@ final class ServerProxyRuntime {
                     }
 
                     stats.addRawDown(n);
+                    if (sampleCollector != null) {
+                        sampleCollector.accept(buf, 0, n);
+                    }
                     zstdOut.write(buf, 0, n);
                     hasPending = true;
                     if (flushIntervalNs == 0L || (System.nanoTime() - lastFlushNs) >= flushIntervalNs) {
@@ -764,6 +840,9 @@ final class ServerProxyRuntime {
                 }
             } finally {
                 src.setSoTimeout(originalTimeout);
+                if (sampleCollector != null) {
+                    sampleCollector.finish();
+                }
             }
 
             zstdOut.flush();
@@ -1208,6 +1287,8 @@ final class ServerProxyRuntime {
         int burstBytes = parseInt(props.getProperty("burst_bytes"), DEFAULT_BURST_BYTES);
         boolean trustProxyProtocol = Boolean.parseBoolean(props.getProperty("trust_proxy_protocol", "false").trim());
         Set<String> trustedProxyIps = parseTrustedProxyIps(props.getProperty("trusted_proxy_ips", DEFAULT_TRUSTED_PROXY_IPS));
+        CompressionOptions compression = loadCompressionOptions(props, path);
+        setupDictionaryTooling(props, path);
         if (flushInterval.isNegative()) {
             flushInterval = Duration.ZERO;
         }
@@ -1244,8 +1325,200 @@ final class ServerProxyRuntime {
             maxRateGlobalBps,
             burstBytes,
             trustProxyProtocol,
-            trustedProxyIps
+            trustedProxyIps,
+            compression
         );
+    }
+
+    /**
+     * 解析 LDM / 字典 等可选压缩参数。全部默认关闭——返回 {@link CompressionOptions#none()} 时
+     * 压缩行为与历史版本逐字节一致。字典加载失败仅记日志并退回无字典，不影响启动。
+     */
+    private CompressionOptions loadCompressionOptions(Properties props, Path configPath) {
+        boolean ldm = Boolean.parseBoolean(props.getProperty("long_distance_matching", "false").trim());
+        int windowLog = parseInt(props.getProperty("window_log"), 0);
+
+        byte[] dictionary = null;
+        String dictName = ServerProxyConfigFile.resolveDictionaryName(props, configPath.getParent());
+        if (!dictName.isEmpty()) {
+            try {
+                dictionary = DictionaryFiles.load(configPath.getParent(), dictName);
+                if (dictionary != null) {
+                    LOGGER.info(
+                        "[zstdnet-server] loaded compression dictionary '{}' ({} bytes, id {})",
+                        dictName,
+                        dictionary.length,
+                        com.github.luben.zstd.Zstd.getDictIdFromDict(dictionary)
+                    );
+                }
+            } catch (Exception ex) {
+                LOGGER.error("[zstdnet-server] failed to load dictionary '{}'; continuing without it: {}", dictName, ex.toString());
+                dictionary = null;
+            }
+        }
+
+        CompressionOptions compression = CompressionOptions.of(ldm, windowLog, dictionary);
+        if (compression.effectiveWindowLog() > CompressionOptions.DEFAULT_DECOMPRESS_WINDOW_LOG_MAX) {
+            LOGGER.warn(
+                "[zstdnet-server] window_log {} exceeds {}; connecting clients must enable a matching long_distance_matching/window_log or they will fail to decode the stream.",
+                compression.effectiveWindowLog(),
+                CompressionOptions.DEFAULT_DECOMPRESS_WINDOW_LOG_MAX
+            );
+        }
+        return compression;
+    }
+
+    /**
+     * 配置字典制作工具：采样（{@code dictionary_capture}）与一次性训练（{@code dictionary_train}）。
+     * 二者默认关闭，关闭时此方法不产生任何运行时开销。
+     */
+    private void setupDictionaryTooling(Properties props, Path configPath) {
+        stopAutoDictWatcher();
+        Path configDir = configPath.getParent();
+        Path trainedDict = DictionaryFiles.dictDir(configDir).resolve(ServerProxyConfigFile.AUTO_TRAINED_DICT);
+
+        boolean auto = Boolean.parseBoolean(props.getProperty("dictionary_auto", "false").trim());
+        boolean autoTrained = auto && Files.isRegularFile(trainedDict);
+        // dictionary_auto 且还没训练出字典 -> 自动进入「学习」：边采样边等够样本自动训练。
+        // 已训练好则不再采样，直接用（见 loadCompressionOptions/resolveDictionaryName）。
+        boolean autoLearning = auto && !autoTrained;
+
+        boolean capture = autoLearning || Boolean.parseBoolean(props.getProperty("dictionary_capture", "false").trim());
+        this.dictionarySampler = capture ? new DictionarySampler(DictionaryFiles.samplesDir(configDir)) : null;
+        if (capture) {
+            LOGGER.info("[zstdnet-server] dictionary sampling active; capturing connection-start traffic into {}", DictionaryFiles.samplesDir(configDir));
+        }
+
+        if (autoLearning) {
+            startAutoDictWatcher(configDir, trainedDict);
+            LOGGER.info("[zstdnet-server] dictionary_auto enabled: learning from live traffic; will auto-train after a few player connections, then enable and push the dictionary live (no restart, no disconnect of current sessions).");
+        } else if (autoTrained) {
+            LOGGER.info("[zstdnet-server] dictionary_auto: using auto-trained dictionary {}", trainedDict);
+        }
+
+        // 手动一次性训练（进阶用法，与 auto 互不冲突）。
+        if (Boolean.parseBoolean(props.getProperty("dictionary_train", "false").trim())) {
+            trainDictionaryFromSamples(configDir);
+        }
+    }
+
+    /**
+     * dictionary_auto 后台轮询器：样本攒够后在独立线程训练出 trained.dict，然后
+     * {@link #applyAutoTrainedDictionary} 把字典<b>热插</b>进运行时（不断开任何在线连接），
+     * 并置 {@link #dictionaryRolloutId} 让 per-variant tick 向所有在线玩家广播下发。
+     */
+    private void startAutoDictWatcher(Path configDir, Path trainedDict) {
+        Path samplesDir = DictionaryFiles.samplesDir(configDir);
+        ScheduledExecutorService watcher = Executors.newSingleThreadScheduledExecutor(new NamedFactory("zstdsrv-autodict"));
+        AtomicBoolean done = new AtomicBoolean(false);
+        watcher.scheduleWithFixedDelay(() -> {
+            if (done.get()) {
+                return;
+            }
+            try {
+                byte[] dictionary;
+                if (Files.isRegularFile(trainedDict)) {
+                    // 字典已存在（外部/并发生成）：直接热插启用。
+                    dictionary = Files.readAllBytes(trainedDict);
+                } else {
+                    if (countSampleFiles(samplesDir) < AUTO_TRAIN_MIN_SAMPLES) {
+                        return;
+                    }
+                    dictionary = DictionaryTrainer.train(samplesDir, AUTO_TRAIN_DICT_BYTES);
+                    if (dictionary == null) {
+                        // 样本暂不足以训出有效字典，继续等更多样本（不重启、不刷屏）。
+                        return;
+                    }
+                    Files.createDirectories(trainedDict.getParent());
+                    Files.write(trainedDict, dictionary);
+                    LOGGER.info(
+                        "[zstdnet-server] dictionary_auto: trained {} ({} bytes, id {}).",
+                        trainedDict,
+                        dictionary.length,
+                        com.github.luben.zstd.Zstd.getDictIdFromDict(dictionary)
+                    );
+                }
+                done.set(true);
+                applyAutoTrainedDictionary(dictionary);
+            } catch (Throwable ex) {
+                LOGGER.warn("[zstdnet-server] dictionary_auto watcher error: {}", ex.toString());
+            }
+        }, AUTO_TRAIN_POLL_SECONDS, AUTO_TRAIN_POLL_SECONDS, TimeUnit.SECONDS);
+        this.autoDictWatcher = watcher;
+    }
+
+    /**
+     * 把自动训练出的字典热插进运行时：替换 {@code cfg} 的压缩参数（仅影响<b>新</b>连接，在线连接照常不断），
+     * 关闭采样，并置位 {@link #dictionaryRolloutId} 让上层向在线玩家广播下发。
+     * 失败安全：任何异常都不影响现有转发。
+     */
+    private void applyAutoTrainedDictionary(byte[] dictionary) {
+        synchronized (lifecycleLock) {
+            if (!running || cfg == null || dictionary == null || dictionary.length == 0) {
+                return;
+            }
+            CompressionOptions current = cfg.compression;
+            CompressionOptions enabled = CompressionOptions.of(
+                current.longDistanceMatching(),
+                current.effectiveWindowLog(),
+                dictionary
+            );
+            cfg = cfg.withCompression(enabled);
+            dictionarySampler = null; // 已训练，停止采样
+            dictionaryRolloutId = enabled.dictionaryId();
+            LOGGER.info(
+                "[zstdnet-server] dictionary_auto: enabled dictionary id {} live (no reconnects); announcing to online players.",
+                enabled.dictionaryId()
+            );
+        }
+    }
+
+    private void stopAutoDictWatcher() {
+        ScheduledExecutorService watcher = this.autoDictWatcher;
+        this.autoDictWatcher = null;
+        if (watcher != null) {
+            watcher.shutdownNow();
+        }
+    }
+
+    private static int countSampleFiles(Path samplesDir) {
+        if (!Files.isDirectory(samplesDir)) {
+            return 0;
+        }
+        int count = 0;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(samplesDir, "*.bin")) {
+            for (Path ignored : stream) {
+                count++;
+            }
+        } catch (IOException ignored) {
+            // 目录暂不可读时按当前计数返回，下一轮再试。
+        }
+        return count;
+    }
+
+    private void trainDictionaryFromSamples(Path configDir) {
+        Path samplesDir = DictionaryFiles.samplesDir(configDir);
+        try {
+            byte[] dictionary = DictionaryTrainer.train(samplesDir, 112 * 1024);
+            if (dictionary == null) {
+                LOGGER.warn(
+                    "[zstdnet-server] dictionary_train=true but not enough samples in {} yet. Enable dictionary_capture, let players connect, then try again.",
+                    samplesDir
+                );
+                return;
+            }
+            Path out = DictionaryFiles.dictDir(configDir).resolve("trained.dict");
+            Files.createDirectories(out.getParent());
+            Files.write(out, dictionary);
+            LOGGER.info(
+                "[zstdnet-server] trained dictionary written to {} ({} bytes, id {}). Set dictionary=trained.dict and dictionary_train=false to use it, then restart.",
+                out,
+                dictionary.length,
+                com.github.luben.zstd.Zstd.getDictIdFromDict(dictionary)
+            );
+        } catch (Exception ex) {
+            LOGGER.error("[zstdnet-server] dictionary training failed: {}", ex.toString());
+        }
     }
 
     private Set<String> parseTrustedProxyIps(String raw) {
@@ -1848,7 +2121,8 @@ final class ServerProxyRuntime {
         long maxRateGlobalBps,
         int burstBytes,
         boolean trustProxyProtocol,
-        Set<String> trustedProxyIps
+        Set<String> trustedProxyIps,
+        CompressionOptions compression
     ) {
         private ProxyConfig withTarget(HostPort newTarget) {
             return new ProxyConfig(
@@ -1871,7 +2145,34 @@ final class ServerProxyRuntime {
                 maxRateGlobalBps,
                 burstBytes,
                 trustProxyProtocol,
-                trustedProxyIps
+                trustedProxyIps,
+                compression
+            );
+        }
+
+        private ProxyConfig withCompression(CompressionOptions newCompression) {
+            return new ProxyConfig(
+                enabled,
+                autoTakeover,
+                listen,
+                target,
+                voiceChatPassthrough,
+                voiceChatListen,
+                voiceChatTarget,
+                level,
+                maxConnPerIp,
+                maxReqPerWindow,
+                window,
+                banDuration,
+                statsInterval,
+                flushInterval,
+                idleTimeout,
+                maxRatePerConnBps,
+                maxRateGlobalBps,
+                burstBytes,
+                trustProxyProtocol,
+                trustedProxyIps,
+                newCompression
             );
         }
 
@@ -1896,7 +2197,8 @@ final class ServerProxyRuntime {
                 maxRateGlobalBps,
                 burstBytes,
                 trustProxyProtocol,
-                trustedProxyIps
+                trustedProxyIps,
+                compression
             );
         }
 
@@ -1929,7 +2231,8 @@ final class ServerProxyRuntime {
                 maxRateGlobalBps,
                 burstBytes,
                 trustProxyProtocol,
-                trustedProxyIps
+                trustedProxyIps,
+                compression
             );
         }
 
