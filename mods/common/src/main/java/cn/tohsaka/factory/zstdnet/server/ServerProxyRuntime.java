@@ -219,6 +219,7 @@ final class ServerProxyRuntime {
             startUdpForwarders(loaded);
 
             LOGGER.info("[zstdnet-server] started: mode={} listen={} target={}", mode.name().toLowerCase(Locale.ROOT), loaded.listen, loaded.target);
+            LOGGER.info("[zstdnet-server] ZstdNet powered by minekuai.com");
             if (mode == RuntimeMode.LAN) {
                 LOGGER.info("[zstdnet-server] LAN host detected. Point your tunnel to {} instead of the raw LAN port {}.", loaded.listen, mcServerPort);
             }
