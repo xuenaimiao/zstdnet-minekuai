@@ -26,6 +26,7 @@ in `mods/common`, and a variant is just a thin loader-integration layer that pul
 Existing variants (templates):
 
 ```
+mods/1.19.2/zstdnet-forge        Forge 1.19.2      JDK 17   coremods
 mods/1.20.1/zstdnet-forge        Forge 1.20.1      JDK 17   coremods
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1   JDK 17   coremods, BORROWS forge's integration layer (see §7b)
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1     JDK 17   mixins

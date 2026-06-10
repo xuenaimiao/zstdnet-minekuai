@@ -17,13 +17,14 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is five parallel, independent mod projects
+This is **not a single Gradle project**. It is six parallel, independent mod projects
 (each with its own `build.gradle` / `settings.gradle` — there is no root settings.gradle),
 plus a shared **`mods/common`** source-only module that is the single source of truth for the
 loader-agnostic core:
 
 ```
 mods/common                      single-source core (compiled into every variant)
+mods/1.19.2/zstdnet-forge        Forge 1.19.2        JDK 17
 mods/1.20.1/zstdnet-forge        Forge 1.20.1        JDK 17
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17  (reuses forge's integration layer)
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1       JDK 17
@@ -139,7 +140,8 @@ Builds use this external `gradle.bat` directly (not the in-repo wrapper). Requir
 PowerShell build scripts at the repo root pick the right JDK and gradle invocation:
 
 ```powershell
-.\build-forge.ps1                              # Forge 1.20.1 (JDK 17)
+.\build-forge.ps1                              # Forge 1.20.1 (JDK 17, default)
+.\build-forge.ps1 -MinecraftVersion 1.19.2     # Forge 1.19.2 (JDK 17)
 .\build-neoforge.ps1                           # NeoForge 1.21.1 (JDK 21, default)
 .\build-neoforge.ps1 -MinecraftVersion 1.20.1  # NeoForge 1.20.1 (JDK 17)
 ```

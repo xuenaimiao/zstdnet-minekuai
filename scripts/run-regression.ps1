@@ -45,6 +45,12 @@ $env:GRADLE_USER_HOME = $gradleUserHome
 
 $targets = @(
     @{
+        name = 'forge-1.19.2'
+        projectDir = Join-Path $repoRoot 'mods\1.19.2\zstdnet-forge'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-forge-1.19.2-regression'
+        javaHome = 'C:\Program Files\Java\jdk-17'
+    },
+    @{
         name = 'forge-1.20.1'
         projectDir = Join-Path $repoRoot 'mods\1.20.1\zstdnet-forge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-forge-regression'
