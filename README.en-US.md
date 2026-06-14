@@ -328,13 +328,22 @@ Possibly.
 
 UI-heavy menu rewrites can still cause compatibility issues.
 
-### What about Simple Voice Chat or other UDP-based voice mods?
+### What about Simple Voice Chat, Plasmo Voice or other UDP-based voice mods?
 
-Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP packets as raw passthrough on the server side.
+Yes — and it's **zero-config**. Voice audio is not compressed; it's forwarded as raw UDP. ZstdNet auto-detects the independent UDP port that common voice mods (Simple Voice Chat, Plasmo Voice) listen on, takes those ports over, and once a player joins it automatically opens matching listeners on the client's machine — you don't have to fill in any port.
 
-- If Simple Voice Chat uses its own UDP port, you must set `voice_chat_listen` explicitly. `voice_chat_target` can stay blank and will default to the local SVC port.
-- If the UDP route cannot be armed, the game TCP path still works, but voice chat may stay offline.
-- If you want to edit the `voice` passthrough entries in `zstdnet-server.properties` directly, use `/zstdport voice <port>` for the backend voice port, or `/zstdport zstdvoice <port>` for the public voice entry.
+There are two voice transport modes, controlled by the server-side `voice_transport` setting:
+
+- **`tunnel` (default)**: voice UDP also rides ZstdNet's public entry port (the same port as the game), and the server demultiplexes it to the backend voice ports. **This means you only need to expose one public port**, which is ideal for FRP/NAT-traversal setups that forward a single port.
+- **`bridge`**: the client forwards voice UDP straight to the *real server's same port* with no extra server-side hop. This requires you to **port-forward/expose that voice UDP port separately**.
+
+Notes:
+
+- **Same-port voice mods** (Sable / Create Aeronautics, and SVC configured to follow the server port) already work — their UDP shares the game port and is covered by the built-in game passthrough.
+- **Known limitation**: if an admin explicitly sets Simple Voice Chat's `voice_host` or Plasmo's `[host.public].ip` to a public address, the client connects there directly and **bypasses ZstdNet** (the server logs a WARN). Leave them at their defaults (blank / `0.0.0.0`) for ZstdNet to handle voice.
+- **Other UDP mods**: for anything auto-detection misses, list the ports manually via `extra_udp_ports`.
+- If the voice route fails to arm, the game TCP path still works; only voice goes offline.
+- The legacy `voice_chat_listen` / `voice_chat_target` keys are kept for compatibility; `/zstdport voice <port>` and `/zstdport zstdvoice <port>` still work for manual tweaks.
 
 ## Configuration Files
 
@@ -431,9 +440,18 @@ Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP
 
 - `voice_chat_passthrough`：Enable raw UDP passthrough for Simple Voice Chat (default: true)
   - Voice traffic is forwarded without zstd compression
-  - Set to false to disable voice UDP route handling entirely
+  - Set to false to disable voice UDP handling entirely (no detection, takeover, or sync)
 
-- `voice_chat_listen`：Optional public UDP entry for voice chat
+- `voice_transport`: voice/UDP mod transport mode (default: tunnel)
+  - `tunnel`: voice also rides ZstdNet's public entry port (same port as the game); only one public port needs exposing
+  - `bridge`: the client connects voice UDP straight to the real server's same port; you must expose that UDP port separately
+  - Keep Simple Voice Chat's `voice_host` and Plasmo's `[host.public].ip` at their defaults (blank / `0.0.0.0`), or the client will bypass ZstdNet
+
+- `extra_udp_ports`: additional UDP ports to pass through (comma-separated, default: empty)
+  - For other UDP mods that auto-detection misses, e.g. `extra_udp_ports=24454,30000`
+  - Empty means auto-detection only (Simple Voice Chat / Plasmo Voice)
+
+- `voice_chat_listen`：Optional public UDP entry for voice chat (legacy manual config)
   - In singleplayer/LAN mode, the generated default is usually `0.0.0.0:24455`
   - In separate-port mode, this must be set explicitly
 

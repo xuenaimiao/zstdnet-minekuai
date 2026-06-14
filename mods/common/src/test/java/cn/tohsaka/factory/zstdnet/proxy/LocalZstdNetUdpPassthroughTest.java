@@ -1,5 +1,6 @@
 package cn.tohsaka.factory.zstdnet.proxy;
 
+import cn.tohsaka.factory.zstdnet.core.protocol.VoiceTunnelFrame;
 import org.junit.jupiter.api.Test;
 
 import java.net.DatagramPacket;
@@ -7,10 +8,12 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LocalZstdNetUdpPassthroughTest {
 
@@ -79,6 +82,61 @@ class LocalZstdNetUdpPassthroughTest {
             }
             echoThread.join(1000);
             assertNull(echoFailure.get());
+        }
+    }
+
+    @Test
+    void voiceTunnelWrapsAndUnwrapsThroughEntryPort() throws Exception {
+        // 模拟服务端入口端口：收到 ZV1 语音帧（channelId 0）后原样回送，
+        // 等价于「服务端剥头 -> 后端回显 payload -> 重新打同 channelId 头」。客户端应剥头后把 payload 投回语音 mod。
+        try (DatagramSocket entry = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
+            entry.setSoTimeout(5000);
+            AtomicReference<Exception> failure = new AtomicReference<>();
+            Thread entryThread = new Thread(() -> echoVoiceFrame(entry, failure), "zstdnet-test-voice-entry");
+            entryThread.setDaemon(true);
+            entryThread.start();
+
+            int voicePort = freeUdpPort();
+            try (LocalZstdNet.ProxyHandle proxy = LocalZstdNet.start(
+                "127.0.0.1",
+                entry.getLocalPort(),
+                3,
+                LocalZstdNet.Mode.RAW
+            ); DatagramSocket voiceMod = new DatagramSocket()) {
+                proxy.armVoicePorts("tunnel", List.of(voicePort));
+                voiceMod.setSoTimeout(5000);
+
+                byte[] payload = "plasmo-voice-udp".getBytes(StandardCharsets.UTF_8);
+                voiceMod.send(new DatagramPacket(
+                    payload,
+                    payload.length,
+                    InetAddress.getByName("127.0.0.1"),
+                    voicePort
+                ));
+
+                assertArrayEquals(payload, receiveBytes(voiceMod, payload.length));
+            }
+            entryThread.join(1000);
+            assertNull(failure.get());
+        }
+    }
+
+    private static void echoVoiceFrame(DatagramSocket socket, AtomicReference<Exception> failure) {
+        try {
+            byte[] buffer = new byte[1024];
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+            socket.receive(packet);
+            // 入口端口收到的应该是带 ZV1 头的语音帧，而不是裸 UDP。
+            assertTrue(VoiceTunnelFrame.isFrame(packet.getData(), packet.getOffset(), packet.getLength()));
+            socket.send(new DatagramPacket(packet.getData(), packet.getLength(), packet.getSocketAddress()));
+        } catch (Exception e) {
+            failure.set(e);
+        }
+    }
+
+    private static int freeUdpPort() throws Exception {
+        try (DatagramSocket probe = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
+            return probe.getLocalPort();
         }
     }
 

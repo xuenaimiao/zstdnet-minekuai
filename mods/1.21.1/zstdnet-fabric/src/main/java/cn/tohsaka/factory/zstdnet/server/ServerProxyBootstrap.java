@@ -23,6 +23,7 @@ import cn.tohsaka.factory.zstdnet.coremod.ServerRealIpHooks;
 import cn.tohsaka.factory.zstdnet.mixin.ServerGamePacketListenerImplAccessor;
 import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.network.VoicePortSync;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -63,6 +64,11 @@ public final class ServerProxyBootstrap {
         ServerTickEvents.END_SERVER_TICK.register(ServerProxyBootstrap::onServerTick);
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onPlayerLoggedIn(handler.player));
         LOGGER.info("zstdnet server bootstrap initialized");
+    }
+
+    /** 当前生效的语音端口计划（供 VoicePortSync 下发给客户端）。 */
+    public static VoicePortPlan currentVoicePortPlan() {
+        return RUNTIME.currentVoicePortPlan();
     }
 
     public static ServerHudSnapshot currentHudSnapshot() {
@@ -226,6 +232,7 @@ public final class ServerProxyBootstrap {
             }
             if (!connection.isMemoryConnection()) {
                 DictionarySync.announce(player);
+                VoicePortSync.send(player);
             }
             return;
         }

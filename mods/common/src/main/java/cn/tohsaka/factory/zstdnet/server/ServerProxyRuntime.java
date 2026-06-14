@@ -31,6 +31,7 @@ import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
 import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
+import cn.tohsaka.factory.zstdnet.core.protocol.VoiceTunnelFrame;
 import cn.tohsaka.factory.zstdnet.core.stats.TrafficStats;
 import com.github.luben.zstd.ZstdInputStream;
 import com.github.luben.zstd.ZstdOutputStream;
@@ -148,6 +149,7 @@ final class ServerProxyRuntime {
     private volatile HudSnapshot latestHudSnapshot;
     private volatile long loadedConfigLastModified = Long.MIN_VALUE;
     private List<UdpForwarder> udpForwarders = List.of();
+    private volatile VoicePortPlan voicePortPlan = VoicePortPlan.empty();
 
     /**
      * 启动运行时。
@@ -1274,6 +1276,8 @@ final class ServerProxyRuntime {
         boolean voiceChatPassthrough = Boolean.parseBoolean(props.getProperty("voice_chat_passthrough", "true").trim());
         String voiceChatListen = props.getProperty("voice_chat_listen", "").trim();
         String voiceChatTarget = props.getProperty("voice_chat_target", "").trim();
+        String voiceTransport = props.getProperty("voice_transport", "tunnel").trim();
+        String extraUdpPorts = props.getProperty("extra_udp_ports", "").trim();
 
         int level = clamp(parseInt(props.getProperty("level"), DEFAULT_ZSTD_LEVEL), 1, 22);
         int maxConn = parseInt(props.getProperty("max_conn_per_ip"), DEFAULT_MAX_CONN_PER_IP);
@@ -1327,7 +1331,9 @@ final class ServerProxyRuntime {
             burstBytes,
             trustProxyProtocol,
             trustedProxyIps,
-            compression
+            compression,
+            voiceTransport,
+            extraUdpPorts
         );
     }
 
@@ -1580,6 +1586,12 @@ final class ServerProxyRuntime {
             # 语音聊天的后端 UDP 目标；LAN 默认指向当前游戏 UDP 端口。
             voice_chat_target=127.0.0.1:${VOICE_PORT}
 
+            # 语音/UDP 传输方式：tunnel=语音也走入口端口（只放行一个口）；bridge=语音直连真实服务器同端口。
+            voice_transport=tunnel
+
+            # 额外透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。留空=仅自动探测。
+            extra_udp_ports=
+
             # zstd 压缩等级（1-22，通常建议 3-9）。
             level=${LEVEL}
 
@@ -1662,6 +1674,12 @@ final class ServerProxyRuntime {
 
             # 语音聊天的后端 UDP 目标；留空时指向本机当前 LAN 端口，填写后按配置值生效。
             voice_chat_target=
+
+            # 语音/UDP 传输方式：tunnel=语音也走入口端口（只放行一个口）；bridge=语音直连真实服务器同端口。
+            voice_transport=tunnel
+
+            # 额外透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。留空=仅自动探测。
+            extra_udp_ports=
 
             # zstd 压缩等级（1-22，通常建议 3-9）。
             level=${LEVEL}
@@ -2123,7 +2141,9 @@ final class ServerProxyRuntime {
         int burstBytes,
         boolean trustProxyProtocol,
         Set<String> trustedProxyIps,
-        CompressionOptions compression
+        CompressionOptions compression,
+        String voiceTransport,
+        String extraUdpPorts
     ) {
         private ProxyConfig withTarget(HostPort newTarget) {
             return new ProxyConfig(
@@ -2147,7 +2167,9 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                compression
+                compression,
+                voiceTransport,
+                extraUdpPorts
             );
         }
 
@@ -2173,7 +2195,9 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                newCompression
+                newCompression,
+                voiceTransport,
+                extraUdpPorts
             );
         }
 
@@ -2199,7 +2223,9 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                compression
+                compression,
+                voiceTransport,
+                extraUdpPorts
             );
         }
 
@@ -2233,7 +2259,9 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                compression
+                compression,
+                voiceTransport,
+                extraUdpPorts
             );
         }
 
@@ -2444,19 +2472,70 @@ final class ServerProxyRuntime {
     }
 
     private void startUdpForwarders(ProxyConfig config) {
+        VoicePortPlan plan = computeVoicePortPlan(config);
+        this.voicePortPlan = plan;
+
+        // tunnel 模式：把探测到的语音端口作为「入口端口上的多路复用通道」挂到 game forwarder，
+        // 语音 UDP 与游戏 UDP 共用同一个公网入口端口（见 VoiceTunnelFrame）。
+        // bridge / off：game forwarder 不带语音通道，语音由客户端直连真实服务器同端口（或不处理）。
+        List<HostPort> tunnelTargets = plan.isTunnel()
+            ? plan.ports().stream().map(p -> new HostPort("127.0.0.1", p)).toList()
+            : List.of();
+
         List<UdpRoute> routes = buildUdpRoutes(config);
         List<UdpForwarder> started = new ArrayList<>();
         for (UdpRoute route : routes) {
+            List<HostPort> voiceChannels = "game".equals(route.label()) ? tunnelTargets : List.of();
             try {
-                UdpForwarder forwarder = new UdpForwarder(route);
+                UdpForwarder forwarder = new UdpForwarder(route, voiceChannels);
                 forwarder.start();
                 started.add(forwarder);
-                LOGGER.info("[zstdnet-server] UDP route armed [{}]: {} -> {}", route.label(), route.listen(), route.target());
+                if (voiceChannels.isEmpty()) {
+                    LOGGER.info("[zstdnet-server] UDP route armed [{}]: {} -> {}", route.label(), route.listen(), route.target());
+                } else {
+                    LOGGER.info(
+                        "[zstdnet-server] UDP route armed [{}]: {} -> {} (+{} voice tunnel channel(s) on the entry port: {})",
+                        route.label(),
+                        route.listen(),
+                        route.target(),
+                        voiceChannels.size(),
+                        plan.ports()
+                    );
+                }
             } catch (Exception e) {
                 LOGGER.warn("[zstdnet-server] UDP route skipped [{}] {} -> {}: {}", route.label(), route.listen(), route.target(), e.toString());
             }
         }
         this.udpForwarders = started;
+    }
+
+    /**
+     * 探测后端语音 mod 的独立端口，结合 {@code voice_transport} 得出本次的语音端口计划。
+     * 结果同时用于：(1) tunnel 模式下 game forwarder 的多路复用通道；(2) 通过网络包下发给客户端，
+     * 让客户端在本机为这些端口开监听（隧道打标 / 直连桥接）。
+     */
+    private VoicePortPlan computeVoicePortPlan(ProxyConfig config) {
+        if (!config.voiceChatPassthrough) {
+            return VoicePortPlan.empty();
+        }
+        String transport = normalizeVoiceTransport(config.voiceTransport);
+        List<VoicePortDetector.VoicePort> detected =
+            VoicePortDetector.detect(Platforms.get().configDir(), config.target.port(), config.extraUdpPorts);
+        List<Integer> ports = detected.stream().map(VoicePortDetector.VoicePort::port).toList();
+        if (!ports.isEmpty()) {
+            LOGGER.info("[zstdnet-server] voice ports detected (transport={}): {}", transport, ports);
+        }
+        return new VoicePortPlan(transport, ports);
+    }
+
+    private static String normalizeVoiceTransport(String raw) {
+        String v = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        return "bridge".equals(v) ? "bridge" : "tunnel";
+    }
+
+    /** 当前生效的语音端口计划（供服务端引导层下发给客户端）。 */
+    public VoicePortPlan currentVoicePortPlan() {
+        return voicePortPlan;
     }
 
     private List<UdpRoute> buildUdpRoutes(ProxyConfig config) {
@@ -2496,14 +2575,19 @@ final class ServerProxyRuntime {
         private static final int UDP_BUF_SIZE = 65535;
         private static final long SESSION_TIMEOUT_MS = 60_000L;
 
+        private static final int CHANNEL_GAME = -1;
+
         private final UdpRoute route;
+        // channelId -> 后端语音端口；为空表示本路由不承载语音隧道（仅裸游戏透传，行为同历史版本）。
+        private final List<HostPort> voiceTargets;
         private volatile boolean running;
         private DatagramSocket serverSocket;
         private Thread forwardThread;
-        private final Map<SocketAddress, UdpSession> sessions = new ConcurrentHashMap<>();
+        private final Map<SessionKey, UdpSession> sessions = new ConcurrentHashMap<>();
 
-        UdpForwarder(UdpRoute route) {
+        UdpForwarder(UdpRoute route, List<HostPort> voiceTargets) {
             this.route = route;
+            this.voiceTargets = voiceTargets == null ? List.of() : List.copyOf(voiceTargets);
         }
 
         void start() throws IOException {
@@ -2538,7 +2622,7 @@ final class ServerProxyRuntime {
 
         private void forwardLoop() {
             byte[] buf = new byte[UDP_BUF_SIZE];
-            InetSocketAddress targetAddr = route.target().toAddress();
+            InetSocketAddress gameTarget = route.target().toAddress();
             long lastSweep = System.currentTimeMillis();
 
             while (running) {
@@ -2553,16 +2637,39 @@ final class ServerProxyRuntime {
                     }
 
                     SocketAddress clientAddr = packet.getSocketAddress();
-                    UdpSession session = sessions.computeIfAbsent(clientAddr, k -> createSession(k, targetAddr));
+                    int len = packet.getLength();
+                    int off = packet.getOffset();
+                    byte[] raw = packet.getData();
+
+                    // demux：带 ZV1 头的是语音隧道帧，按 channelId 转对应后端语音端口；否则裸透传给后端游戏端口（向后兼容）。
+                    int channel;
+                    InetSocketAddress dest;
+                    byte[] payload;
+                    if (!voiceTargets.isEmpty() && VoiceTunnelFrame.isFrame(raw, off, len)) {
+                        int cid = VoiceTunnelFrame.channelId(raw, off);
+                        if (cid >= voiceTargets.size()) {
+                            continue;
+                        }
+                        channel = cid;
+                        dest = voiceTargets.get(cid).toAddress();
+                        int payloadLen = len - VoiceTunnelFrame.HEADER_LEN;
+                        payload = new byte[payloadLen];
+                        System.arraycopy(raw, off + VoiceTunnelFrame.HEADER_LEN, payload, 0, payloadLen);
+                    } else {
+                        channel = CHANNEL_GAME;
+                        dest = gameTarget;
+                        payload = new byte[len];
+                        System.arraycopy(raw, off, payload, 0, len);
+                    }
+
+                    SessionKey key = new SessionKey(clientAddr, channel);
+                    InetSocketAddress sessionDest = dest;
+                    UdpSession session = sessions.computeIfAbsent(key, k -> createSession(k, sessionDest));
                     if (session == null) {
                         continue;
                     }
                     session.lastActivity = System.currentTimeMillis();
-
-                    byte[] data = new byte[packet.getLength()];
-                    System.arraycopy(packet.getData(), packet.getOffset(), data, 0, packet.getLength());
-                    DatagramPacket forward = new DatagramPacket(data, data.length, targetAddr);
-                    session.socket.send(forward);
+                    session.socket.send(new DatagramPacket(payload, payload.length, dest));
 
                     long now = System.currentTimeMillis();
                     if (now - lastSweep > 10_000L) {
@@ -2577,25 +2684,30 @@ final class ServerProxyRuntime {
             }
         }
 
-        private UdpSession createSession(SocketAddress clientAddr, InetSocketAddress targetAddr) {
+        private UdpSession createSession(SessionKey key, InetSocketAddress targetAddr) {
             try {
                 DatagramSocket clientSocket = new DatagramSocket();
                 clientSocket.setSoTimeout(1000);
-                UdpSession session = new UdpSession(clientSocket, clientAddr);
+                UdpSession session = new UdpSession(clientSocket, key);
 
-                Thread returnThread = new Thread(() -> returnLoop(session), "zstdsrv-udp-ret-" + clientAddr);
+                Thread returnThread = new Thread(
+                    () -> returnLoop(session),
+                    "zstdsrv-udp-ret-" + route.label() + "-ch" + key.channel() + "-" + key.clientAddr()
+                );
                 returnThread.setDaemon(true);
                 returnThread.start();
                 session.returnThread = returnThread;
                 return session;
             } catch (IOException e) {
-                LOGGER.debug("[zstdnet-server] UDP session create failed [{}] for {}: {}", route.label(), clientAddr, e.toString());
+                LOGGER.debug("[zstdnet-server] UDP session create failed [{}] for {}: {}", route.label(), key.clientAddr(), e.toString());
                 return null;
             }
         }
 
         private void returnLoop(UdpSession session) {
             byte[] buf = new byte[UDP_BUF_SIZE];
+            int channel = session.key.channel();
+            InetSocketAddress clientAddr = (InetSocketAddress) session.key.clientAddr();
             while (running && !session.socket.isClosed()) {
                 try {
                     DatagramPacket packet = new DatagramPacket(buf, buf.length);
@@ -2609,18 +2721,25 @@ final class ServerProxyRuntime {
                     }
                     session.lastActivity = System.currentTimeMillis();
 
-                    byte[] data = new byte[packet.getLength()];
-                    System.arraycopy(packet.getData(), packet.getOffset(), data, 0, packet.getLength());
-                    DatagramPacket returnPacket = new DatagramPacket(data, data.length, (InetSocketAddress) session.clientAddr);
-                    serverSocket.send(returnPacket);
+                    int len = packet.getLength();
+                    int off = packet.getOffset();
+                    byte[] out;
+                    if (channel == CHANNEL_GAME) {
+                        out = new byte[len];
+                        System.arraycopy(packet.getData(), off, out, 0, len);
+                    } else {
+                        // 语音回程：重新打 ZV1 头，客户端据 channelId 投回对应本地语音端口。
+                        out = VoiceTunnelFrame.wrap(channel, packet.getData(), off, len);
+                    }
+                    serverSocket.send(new DatagramPacket(out, out.length, clientAddr));
                 } catch (IOException e) {
                     if (running && !session.socket.isClosed()) {
-                        LOGGER.debug("[zstdnet-server] UDP return error [{}] for {}: {}", route.label(), session.clientAddr, e.toString());
+                        LOGGER.debug("[zstdnet-server] UDP return error [{}] for {}: {}", route.label(), session.key.clientAddr(), e.toString());
                     }
                     break;
                 }
             }
-            sessions.remove(session.clientAddr);
+            sessions.remove(session.key);
             session.close();
         }
 
@@ -2639,15 +2758,18 @@ final class ServerProxyRuntime {
             });
         }
 
+        private record SessionKey(SocketAddress clientAddr, int channel) {
+        }
+
         private static final class UdpSession {
             final DatagramSocket socket;
-            final SocketAddress clientAddr;
+            final SessionKey key;
             volatile long lastActivity;
             volatile Thread returnThread;
 
-            UdpSession(DatagramSocket socket, SocketAddress clientAddr) {
+            UdpSession(DatagramSocket socket, SessionKey key) {
                 this.socket = socket;
-                this.clientAddr = clientAddr;
+                this.key = key;
                 this.lastActivity = System.currentTimeMillis();
             }
 

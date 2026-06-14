@@ -22,6 +22,7 @@ package cn.tohsaka.factory.zstdnet.client;
 import cn.tohsaka.factory.zstdnet.ClientConfig;
 import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.network.VoicePortSync;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.api.ClientModInitializer;
 import org.slf4j.Logger;
@@ -34,6 +35,7 @@ public final class ZstdnetClient implements ClientModInitializer {
         ClientConfig.init();
         LanCompressionSync.initClient();
         DictionarySync.initClient();
+        VoicePortSync.initClient();
         ClientProxyPublisher.init();
         LOGGER.info("zstdnet client loaded");
     }
