@@ -21,6 +21,8 @@ package cn.tohsaka.factory.zstdnet;
 
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.core.compress.DictionaryFiles;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformFormat;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import com.mojang.logging.LogUtils;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -37,6 +39,7 @@ public final class ClientConfig {
     private static final ModConfigSpec.BooleanValue LONG_DISTANCE_MATCHING;
     private static final ModConfigSpec.IntValue WINDOW_LOG;
     private static final ModConfigSpec.ConfigValue<String> DICTIONARY;
+    private static final ModConfigSpec.BooleanValue TRANSFORM;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -53,6 +56,9 @@ public final class ClientConfig {
         DICTIONARY = builder
             .comment("Trained dictionary file under config/zstdnet/dict/ (or absolute path). Empty = off. Must match the server's dictionary.")
             .define("dictionary", "");
+        TRANSFORM = builder
+            .comment("Entity packet-stream transform: better ratio in entity-heavy scenes. Only active if the server enables it too; byte-identical fallback otherwise. Default off.")
+            .define("transform", false);
 
         SPEC = builder.build();
     }
@@ -77,5 +83,11 @@ public final class ClientConfig {
             }
         }
         return CompressionOptions.of(ldm, windowLog, dictionary);
+    }
+
+    public static TransformOptions transform() {
+        return TRANSFORM.get()
+            ? TransformOptions.enabled(TransformFormat.MAX_SUPPORTED_VERSION, 0)
+            : TransformOptions.disabled();
     }
 }

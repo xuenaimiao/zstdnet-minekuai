@@ -94,6 +94,7 @@ public final class ConnectScreenHooks {
                 closeCurrentProxy();
                 CompressionOptions compression = ClientDictionaryStore.resolveFor(
                     Platforms.get().configDir(), remoteAddr, ClientConfig.compression());
+                LocalZstdNet.configureClientTransform(ClientConfig.transform());
                 LocalZstdNet.ProxyHandle proxy = LocalZstdNet.start(
                     connectHost,
                     resolved.getPort(),

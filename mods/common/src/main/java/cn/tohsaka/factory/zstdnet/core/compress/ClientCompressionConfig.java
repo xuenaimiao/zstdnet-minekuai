@@ -19,6 +19,8 @@
 
 package cn.tohsaka.factory.zstdnet.core.compress;
 
+import cn.tohsaka.factory.zstdnet.core.transform.TransformFormat;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import org.slf4j.Logger;
 
 import java.nio.file.Path;
@@ -37,8 +39,8 @@ public final class ClientCompressionConfig {
     private ClientCompressionConfig() {
     }
 
-    /** 解析结果：客户端 level 与附加压缩参数。 */
-    public record Parsed(int level, CompressionOptions compression) {
+    /** 解析结果：客户端 level、附加压缩参数与实体包流变换偏好。 */
+    public record Parsed(int level, CompressionOptions compression, TransformOptions transform) {
     }
 
     /**
@@ -68,7 +70,12 @@ public final class ClientCompressionConfig {
         if (log != null && compression.hasDictionary()) {
             log.info("[zstdnet-client] loaded dictionary '{}' ({} bytes, id {})", dictName, dictionary.length, compression.dictionaryId());
         }
-        return new Parsed(level, compression);
+
+        boolean transformOn = Boolean.parseBoolean(trimmed(props, "transform", "false"));
+        TransformOptions transform = transformOn
+            ? TransformOptions.enabled(TransformFormat.MAX_SUPPORTED_VERSION, 0)
+            : TransformOptions.disabled();
+        return new Parsed(level, compression, transform);
     }
 
     /** 首次生成 {@code zstdnet-client.toml} 时写入的带注释模板。 */
@@ -89,6 +96,11 @@ public final class ClientCompressionConfig {
             # Leave empty to disable. Only set this when the SERVER you connect to ships the
             # SAME dictionary file (ask the server admin); otherwise the connection will fail.
             dictionary=
+
+            # Entity packet-stream transform: de-interleaves entity move/metadata fields before zstd
+            # for much better ratio in entity-heavy scenes. Only takes effect if the SERVER also enables
+            # it; safe and byte-identical against servers that don't (auto passthrough). Default off.
+            transform=false
             """.formatted(DEFAULT_LEVEL);
     }
 

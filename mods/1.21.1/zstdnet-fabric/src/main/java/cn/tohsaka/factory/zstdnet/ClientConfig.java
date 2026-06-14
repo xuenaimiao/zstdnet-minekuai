@@ -21,6 +21,7 @@ package cn.tohsaka.factory.zstdnet;
 
 import cn.tohsaka.factory.zstdnet.core.compress.ClientCompressionConfig;
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
@@ -43,6 +44,7 @@ public final class ClientConfig {
 
     private static volatile int level = ClientCompressionConfig.DEFAULT_LEVEL;
     private static volatile CompressionOptions compression = CompressionOptions.none();
+    private static volatile TransformOptions transform = TransformOptions.disabled();
     private static volatile boolean initialized;
 
     private ClientConfig() {
@@ -59,6 +61,7 @@ public final class ClientConfig {
             ClientCompressionConfig.Parsed parsed = loadOrCreate();
             level = parsed.level();
             compression = parsed.compression();
+            transform = parsed.transform();
             initialized = true;
         }
     }
@@ -77,8 +80,15 @@ public final class ClientConfig {
         return compression;
     }
 
+    public static TransformOptions transform() {
+        if (!initialized) {
+            init();
+        }
+        return transform;
+    }
+
     private static ClientCompressionConfig.Parsed loadOrCreate() {
-        ClientCompressionConfig.Parsed fallback = new ClientCompressionConfig.Parsed(ClientCompressionConfig.DEFAULT_LEVEL, CompressionOptions.none());
+        ClientCompressionConfig.Parsed fallback = new ClientCompressionConfig.Parsed(ClientCompressionConfig.DEFAULT_LEVEL, CompressionOptions.none(), TransformOptions.disabled());
         try {
             Files.createDirectories(PATH.getParent());
             if (!Files.exists(PATH)) {

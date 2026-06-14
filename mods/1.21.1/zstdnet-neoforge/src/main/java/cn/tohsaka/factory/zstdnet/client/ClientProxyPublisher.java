@@ -555,6 +555,7 @@ public final class ClientProxyPublisher {
                 closeActiveSessionLocked();
                 CompressionOptions compression = ClientDictionaryStore.resolveFor(
                     Platforms.get().configDir(), remoteAddr, ClientConfig.compression());
+                LocalZstdNet.configureClientTransform(ClientConfig.transform());
                 proxy = LocalZstdNet.start(
                     remote.connectHost(),
                     remote.connectPort(),
