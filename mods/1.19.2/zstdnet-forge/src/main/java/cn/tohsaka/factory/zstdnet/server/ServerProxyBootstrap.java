@@ -22,6 +22,7 @@ package cn.tohsaka.factory.zstdnet.server;
 import cn.tohsaka.factory.zstdnet.coremod.ServerRealIpHooks;
 import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.network.VoicePortSync;
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
@@ -70,6 +71,11 @@ public final class ServerProxyBootstrap {
         MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onServerTick);
         MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onPlayerLoggedIn);
         LOGGER.info("zstdnet server bootstrap initialized");
+    }
+
+    /** 当前生效的语音端口计划（供 VoicePortSync 下发给客户端）。 */
+    public static VoicePortPlan currentVoicePortPlan() {
+        return RUNTIME.currentVoicePortPlan();
     }
 
     public static ServerHudSnapshot currentHudSnapshot() {
@@ -251,6 +257,7 @@ public final class ServerProxyBootstrap {
             }
             if (!player.connection.connection.isMemoryConnection()) {
                 DictionarySync.announce(player);
+                VoicePortSync.send(player);
             }
             return;
         }

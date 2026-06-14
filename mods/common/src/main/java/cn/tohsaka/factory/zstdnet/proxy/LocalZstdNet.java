@@ -26,6 +26,7 @@ import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
 import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
+import cn.tohsaka.factory.zstdnet.core.protocol.VoiceTunnelFrame;
 import com.github.luben.zstd.ZstdInputStream;
 import com.github.luben.zstd.ZstdOutputStream;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
@@ -45,6 +46,8 @@ import java.net.SocketException;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -767,6 +770,183 @@ public final class LocalZstdNet {
         }
     }
 
+    /**
+     * 客户端「单端口语音隧道」转发器（tunnel 模式）。
+     *
+     * <p>在 {@code 127.0.0.1:<语音端口>} 监听语音 mod 发来的 UDP（语音 mod 把服务器地址解析成了本地代理的
+     * 127.0.0.1，端口取自它自己的握手），加上 {@link VoiceTunnelFrame} 包头后发往 zstdnet 的公网入口端口
+     * （与游戏 UDP 同一个端口）；回程剥头后投回语音 mod。服务端按 channelId 拆分到后端对应语音端口。</p>
+     */
+    private static final class VoiceTunnelForwarder {
+        private static final long SESSION_IDLE_TIMEOUT_MS = 60_000L;
+
+        private final String remoteHost;
+        private final int entryPort;
+        private final int localPort;
+        private final int channelId;
+        private final AtomicBoolean running = new AtomicBoolean();
+        private final Map<SocketAddress, Session> sessions = new ConcurrentHashMap<>();
+        private DatagramSocket localSocket;
+        private InetSocketAddress entry;
+        private Thread forwardThread;
+
+        private VoiceTunnelForwarder(String remoteHost, int entryPort, int localPort, int channelId) {
+            this.remoteHost = remoteHost;
+            this.entryPort = entryPort;
+            this.localPort = localPort;
+            this.channelId = channelId;
+        }
+
+        private void start() throws IOException {
+            localSocket = new DatagramSocket(null);
+            localSocket.setReuseAddress(true);
+            localSocket.bind(new InetSocketAddress("127.0.0.1", localPort));
+
+            entry = new InetSocketAddress(remoteHost, entryPort);
+            running.set(true);
+
+            forwardThread = new Thread(
+                this::forwardLoop,
+                "zstdnet-voice-fwd-" + UDP_SEQ.getAndIncrement() + "-ch" + channelId + "-" + localPort
+            );
+            forwardThread.setDaemon(true);
+            forwardThread.start();
+        }
+
+        private void stop() {
+            running.set(false);
+            if (localSocket != null) {
+                localSocket.close();
+            }
+            sessions.values().forEach(Session::stop);
+            sessions.clear();
+            joinQuietly(forwardThread);
+        }
+
+        private void forwardLoop() {
+            byte[] buf = new byte[UDP_BUF_SIZE];
+            while (running.get()) {
+                try {
+                    DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                    localSocket.receive(packet);
+
+                    byte[] framed = VoiceTunnelFrame.wrap(channelId, packet.getData(), packet.getOffset(), packet.getLength());
+                    sessionFor(packet.getSocketAddress()).send(framed);
+                    cleanupExpiredSessions();
+                } catch (SocketException e) {
+                    if (running.get()) {
+                        LOGGER.debug("zstdnet: voice tunnel forward socket closed: {}", e.toString());
+                    }
+                    return;
+                } catch (IOException e) {
+                    if (running.get()) {
+                        LOGGER.debug("zstdnet: voice tunnel forward error: {}", e.toString());
+                    }
+                }
+            }
+        }
+
+        private Session sessionFor(SocketAddress clientAddress) throws IOException {
+            Session existing = sessions.get(clientAddress);
+            if (existing != null) {
+                return existing;
+            }
+            Session created = new Session(clientAddress);
+            Session raced = sessions.putIfAbsent(clientAddress, created);
+            if (raced != null) {
+                created.stop();
+                return raced;
+            }
+            created.start();
+            return created;
+        }
+
+        private void cleanupExpiredSessions() {
+            long now = System.currentTimeMillis();
+            sessions.entrySet().removeIf(entry -> {
+                Session session = entry.getValue();
+                if (now - session.lastActivityMs <= SESSION_IDLE_TIMEOUT_MS) {
+                    return false;
+                }
+                session.stop();
+                return true;
+            });
+        }
+
+        private void joinQuietly(Thread thread) {
+            if (thread == null) {
+                return;
+            }
+            try {
+                thread.join(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private final class Session {
+            private final SocketAddress clientAddress;
+            private final DatagramSocket upstreamSocket;
+            private volatile long lastActivityMs = System.currentTimeMillis();
+            private Thread returnThread;
+
+            private Session(SocketAddress clientAddress) throws SocketException {
+                this.clientAddress = clientAddress;
+                this.upstreamSocket = new DatagramSocket();
+            }
+
+            private void start() {
+                returnThread = new Thread(
+                    this::returnLoop,
+                    "zstdnet-voice-ret-" + UDP_SEQ.getAndIncrement() + "-ch" + channelId + "-" + localPort
+                );
+                returnThread.setDaemon(true);
+                returnThread.start();
+            }
+
+            private void send(byte[] framed) throws IOException {
+                lastActivityMs = System.currentTimeMillis();
+                upstreamSocket.send(new DatagramPacket(framed, framed.length, entry));
+            }
+
+            private void stop() {
+                upstreamSocket.close();
+                joinQuietly(returnThread);
+            }
+
+            private void returnLoop() {
+                byte[] buf = new byte[UDP_BUF_SIZE];
+                while (running.get() && !upstreamSocket.isClosed()) {
+                    try {
+                        DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                        upstreamSocket.receive(packet);
+                        lastActivityMs = System.currentTimeMillis();
+
+                        // 只接受属于本通道的 ZV1 回程帧，剥头后投回语音 mod。
+                        if (!VoiceTunnelFrame.isFrame(packet.getData(), packet.getOffset(), packet.getLength())
+                            || VoiceTunnelFrame.channelId(packet.getData(), packet.getOffset()) != channelId) {
+                            continue;
+                        }
+                        int payloadOff = packet.getOffset() + VoiceTunnelFrame.HEADER_LEN;
+                        int payloadLen = packet.getLength() - VoiceTunnelFrame.HEADER_LEN;
+                        byte[] data = new byte[payloadLen];
+                        System.arraycopy(packet.getData(), payloadOff, data, 0, payloadLen);
+                        localSocket.send(new DatagramPacket(data, data.length, clientAddress));
+                    } catch (SocketException e) {
+                        if (running.get()) {
+                            LOGGER.debug("zstdnet: voice tunnel return socket closed: {}", e.toString());
+                        }
+                        return;
+                    } catch (IOException e) {
+                        if (running.get()) {
+                            LOGGER.debug("zstdnet: voice tunnel return error: {}", e.toString());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     public record HostPort(String host, int port) {
         public static HostPort parse(String raw) {
             if (raw == null || raw.isBlank()) {
@@ -805,6 +985,8 @@ public final class LocalZstdNet {
         private final String remoteHost;
         private final int remotePort;
         private final ProxyStats stats;
+        private final Object voiceLock = new Object();
+        private final List<Runnable> voiceStops = new ArrayList<>();
 
         private ProxyHandle(
             ServerSocket listener,
@@ -846,6 +1028,65 @@ public final class LocalZstdNet {
             return stats.snapshot(mode, remoteHost, remotePort);
         }
 
+        /**
+         * 按服务端下发的语音端口计划，在本机为每个语音端口开监听（零配置兼容各类语音 mod）。
+         * 可重复调用（先全部撤销再重建），由服务端在玩家进服后下发触发（见各变体 VoicePortSync）。
+         *
+         * @param transport {@code tunnel}（语音也走入口端口）或 {@code bridge}（直连真实服务器同端口）
+         * @param ports     服务端探测到的语音端口（有序，下标即隧道 channelId）
+         */
+        public void armVoicePorts(String transport, List<Integer> ports) {
+            synchronized (voiceLock) {
+                disarmVoicePortsLocked();
+                if (ports == null || ports.isEmpty()) {
+                    return;
+                }
+                boolean bridge = "bridge".equalsIgnoreCase(transport);
+                for (int i = 0; i < ports.size(); i++) {
+                    int voicePort = ports.get(i);
+                    if (voicePort < 1 || voicePort > 65535) {
+                        continue;
+                    }
+                    try {
+                        voiceStops.add(bridge ? startVoiceBridge(voicePort) : startVoiceTunnel(i, voicePort));
+                    } catch (IOException e) {
+                        LOGGER.warn("zstdnet: failed to arm voice port {} ({}): {}", voicePort, bridge ? "bridge" : "tunnel", e.toString());
+                    }
+                }
+            }
+        }
+
+        /** 撤销所有已开的语音监听（断开连接 / 重新下发时调用）。 */
+        public void disarmVoicePorts() {
+            synchronized (voiceLock) {
+                disarmVoicePortsLocked();
+            }
+        }
+
+        private void disarmVoicePortsLocked() {
+            for (Runnable stop : voiceStops) {
+                try {
+                    stop.run();
+                } catch (Exception ignored) {
+                }
+            }
+            voiceStops.clear();
+        }
+
+        private Runnable startVoiceBridge(int voicePort) throws IOException {
+            UdpForwarder forwarder = new UdpForwarder(remoteHost, voicePort, voicePort);
+            forwarder.start();
+            LOGGER.info("zstdnet: voice bridge armed 127.0.0.1:{} -> {}:{}", voicePort, remoteHost, voicePort);
+            return forwarder::stop;
+        }
+
+        private Runnable startVoiceTunnel(int channelId, int voicePort) throws IOException {
+            VoiceTunnelForwarder forwarder = new VoiceTunnelForwarder(remoteHost, remotePort, voicePort, channelId);
+            forwarder.start();
+            LOGGER.info("zstdnet: voice tunnel armed 127.0.0.1:{} -> {}:{} (channel {})", voicePort, remoteHost, remotePort, channelId);
+            return forwarder::stop;
+        }
+
         public void closeListener() {
             int localPort = localPort();
             boolean wasRunning = running.getAndSet(false);
@@ -870,6 +1111,7 @@ public final class LocalZstdNet {
         @Override
         public void close() {
             running.set(false);
+            disarmVoicePorts();
             if (udpForwarder != null) {
                 udpForwarder.stop();
             }

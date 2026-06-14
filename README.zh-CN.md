@@ -282,13 +282,22 @@ mc.example.com:35565
 
 如果多人游戏菜单或“对局域网开放”界面被其他模组大幅改写，理论上仍然存在兼容性风险。
 
-### Simple Voice Chat 这类语音模组能不能用？
+### Simple Voice Chat / Plasmo Voice 这类语音模组能不能用？
 
-可以，但语音流量不会走 zstd 压缩，只会在服务端做原样 UDP 转发。
+可以，而且是**零配置**的。语音流量不压缩，只做原样转发。ZstdNet 会自动探测后端常见语音模组（Simple Voice Chat、Plasmo Voice）监听的独立 UDP 端口，并把它们一起接管，玩家进服后自动在客户端本机为这些端口开监听——无需你手动填任何端口。
 
-- 如果 Simple Voice Chat 使用独立 UDP 端口，就必须显式填写 `voice_chat_listen`；`voice_chat_target` 可以留空让模组自动指向本机的 SVC 端口。
-- 如果语音 UDP 路由没有成功启动，游戏本身的 TCP 连接仍然可以正常工作，只是语音会离线。
-- 如果你想直接改 `zstdnet-server.properties` 里的语音转发项，可以用 `/zstdport voice <端口>` 修改后端语音端口，或用 `/zstdport zstdvoice <端口>` 修改公网语音入口。
+语音有两种传输方式，由服务端配置 `voice_transport` 控制：
+
+- **`tunnel`（默认）**：语音 UDP 也走 ZstdNet 的公网入口端口（和游戏同一个端口），服务端按通道拆分后转给后端各语音端口。**这样你只需要对外放行入口端口一个口**，FRP / 内网穿透也只穿一个口即可。
+- **`bridge`**：客户端在本机把语音 UDP 直连到「真实服务器的同一个端口」，服务端不额外中转。这种方式需要你**为该语音端口单独做公网放行 / 端口映射**。
+
+其它说明：
+
+- **同端口语音模组**（Sable / 机械动力：航空学，以及把 SVC 设成跟随服务器端口的情况）一直都能用——它们的 UDP 跟游戏走同一个端口，由内置 game 直通覆盖。
+- **已知边界**：如果管理员把 Simple Voice Chat 的 `voice_host` 或 Plasmo 的 `[host.public].ip` 显式填成了某个公网地址，客户端会按你填的地址直连、**绕过 ZstdNet**（服务端会打印一条 WARN 提示）。要让 ZstdNet 接管语音，请把它们留默认（空 / `0.0.0.0`）。
+- **其它 UDP 模组**：自动探测覆盖不到的，可以用 `extra_udp_ports` 手动补一份端口清单。
+- 如果语音路由没起来，游戏本身的 TCP 连接仍然正常，只是语音会离线。
+- 旧版 `voice_chat_listen` / `voice_chat_target` 仍然保留兼容；`/zstdport voice <端口>`、`/zstdport zstdvoice <端口>` 仍可手动调整。
 
 ## 配置文件
 
@@ -387,11 +396,20 @@ mc.example.com:35565
   - 单位是字节，相当于流量的"缓冲池"
   - 即使设置了限速，短时间内的突发流量也可以超过限制
 
-- `voice_chat_passthrough`：是否为 Simple Voice Chat 启用原样 UDP 转发（默认：true）
+- `voice_chat_passthrough`：是否为语音模组启用原样 UDP 转发（默认：true）
   - 语音流量不会经过 zstd 压缩
-  - 设为 false 后将完全关闭额外的语音 UDP 路由处理
+  - 设为 false 后将完全关闭语音 UDP 处理（不探测、不接管、不下发）
 
-- `voice_chat_listen`：语音的公网 UDP 入口（可选）
+- `voice_transport`：语音/UDP 模组的传输方式（默认：tunnel）
+  - `tunnel`：语音也走 ZstdNet 的公网入口端口（与游戏同一个端口），只需对外放行入口端口一个口
+  - `bridge`：客户端直连「真实服务器同端口」的语音 UDP，服务端不额外中转，需要你单独放行该 UDP 端口
+  - 使用本功能时，请把 Simple Voice Chat 的 `voice_host`、Plasmo 的 `[host.public].ip` 留默认（空 / `0.0.0.0`），否则客户端会绕过 ZstdNet
+
+- `extra_udp_ports`：额外需要透传的 UDP 端口（逗号分隔，默认：空）
+  - 用于自动探测覆盖不到的其它 UDP 模组，例如 `extra_udp_ports=24454,30000`
+  - 留空表示只用自动探测（Simple Voice Chat / Plasmo Voice）
+
+- `voice_chat_listen`：语音的公网 UDP 入口（可选，旧版手动配置）
   - 单机开房 / LAN 模式下，生成出来的默认值通常是 `0.0.0.0:24455`
   - 独立语音端口模式下必须显式填写这里
 
