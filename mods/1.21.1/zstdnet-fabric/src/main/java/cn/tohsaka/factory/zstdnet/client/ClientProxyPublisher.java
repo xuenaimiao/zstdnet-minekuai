@@ -115,6 +115,8 @@ public final class ClientProxyPublisher {
     private Screen lastObservedScreen;
     private ServerProxyBootstrap.ServerHudSnapshot remoteServerHudSnapshot;
     private long remoteServerHudSnapshotMillis;
+    private String pendingVoiceTransport;
+    private List<Integer> pendingVoicePorts;
 
     private ClientProxyPublisher() {
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown, "zstdnet-client-shutdown"));
@@ -131,6 +133,11 @@ public final class ClientProxyPublisher {
 
     public static void acceptRemoteServerHudSnapshot(ServerProxyBootstrap.ServerHudSnapshot snapshot) {
         INSTANCE.updateRemoteServerHudSnapshot(snapshot);
+    }
+
+    /** 收到服务端下发的语音端口列表后，在本机本地代理上为这些端口开监听（见 VoicePortSync）。 */
+    public static void acceptVoicePortList(String transport, List<Integer> ports) {
+        INSTANCE.applyVoicePortList(transport, ports);
     }
 
     public static void onJoinMultiplayerInit(JoinMultiplayerScreen screen) {
@@ -266,6 +273,9 @@ public final class ClientProxyPublisher {
             if (activeProxy != null) {
                 activeSession = activeProxy;
             }
+            if (activeSession != null && pendingVoicePorts != null) {
+                activeSession.armVoicePorts(pendingVoiceTransport, pendingVoicePorts);
+            }
         }
     }
 
@@ -274,6 +284,19 @@ public final class ClientProxyPublisher {
             closeActiveSessionLocked();
             remoteServerHudSnapshot = null;
             remoteServerHudSnapshotMillis = 0L;
+            pendingVoiceTransport = null;
+            pendingVoicePorts = null;
+        }
+    }
+
+    private void applyVoicePortList(String transport, List<Integer> ports) {
+        synchronized (stateLock) {
+            pendingVoiceTransport = transport;
+            pendingVoicePorts = ports;
+            LocalZstdNet.ProxyHandle session = activeSession != null ? activeSession : activeProxy;
+            if (session != null) {
+                session.armVoicePorts(transport, ports);
+            }
         }
     }
 

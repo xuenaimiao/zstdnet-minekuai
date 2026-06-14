@@ -43,6 +43,7 @@ public final class ServerProxyConfigFile {
     private static final String DEFAULT_LISTEN_HOST = "0.0.0.0";
     private static final String DEFAULT_TARGET_HOST = "127.0.0.1";
     private static final String DEFAULT_VOICE_CHAT_LISTEN = DEFAULT_LISTEN_HOST + ":" + DEFAULT_VOICE_CHAT_LISTEN_PORT;
+    private static final String DEFAULT_VOICE_TRANSPORT = "tunnel";
     private static final String DEFAULT_TRUSTED_PROXY_IPS = "127.0.0.1,::1,0:0:0:0:0:0:0:1";
     private static final Set<String> KNOWN_KEYS = Set.of(
         "enabled",
@@ -52,6 +53,8 @@ public final class ServerProxyConfigFile {
         "voice_chat_passthrough",
         "voice_chat_listen",
         "voice_chat_target",
+        "voice_transport",
+        "extra_udp_ports",
         "level",
         "long_distance_matching",
         "window_log",
@@ -207,6 +210,27 @@ public final class ServerProxyConfigFile {
         writeConfigWithComments(path, props, detectLineSeparator(path));
     }
 
+    /**
+     * 写入「插件端」默认配置。插件端（Bukkit/Spigot/Paper、混合端）无法像 mod 那样在绑定前挪后端端口，
+     * 所以必须 {@code auto_takeover=false}：MC 服务器照常占用 server-port 给原版玩家直连，
+     * zstd 代理独占另一个监听端口、把解压后的流量转发回本机后端端口。插件 onEnable 时在配置缺失才调用一次，
+     * 之后管理员可自行编辑此文件（带注释模板会保留）。
+     *
+     * @param listenPort  zstd 代理对外监听端口（需与后端端口不同）
+     * @param backendPort 本机 Minecraft 后端端口（通常即 server.properties 的 server-port）
+     */
+    public static void writePluginDefaults(int listenPort, int backendPort) throws IOException {
+        Path path = path();
+        Properties props = normalizeProperties(loadProperties());
+        Files.createDirectories(path.getParent());
+
+        props.setProperty("enabled", "true");
+        props.setProperty("auto_takeover", "false");
+        props.setProperty("listen", DEFAULT_LISTEN_HOST + ":" + listenPort);
+        props.setProperty("target", DEFAULT_TARGET_HOST + ":" + backendPort);
+        writeConfigWithComments(path, props, detectLineSeparator(path));
+    }
+
     private static Properties loadProperties() {
         Properties props = new Properties();
         Path path = path();
@@ -245,6 +269,8 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("voice_chat_passthrough", "true");
         props.putIfAbsent("voice_chat_listen", DEFAULT_VOICE_CHAT_LISTEN);
         props.putIfAbsent("voice_chat_target", defaultVoiceChatTarget());
+        props.putIfAbsent("voice_transport", DEFAULT_VOICE_TRANSPORT);
+        props.putIfAbsent("extra_udp_ports", "");
         props.putIfAbsent("level", "9");
         props.putIfAbsent("long_distance_matching", "false");
         props.putIfAbsent("window_log", "0");
@@ -344,6 +370,21 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "# 专用服留空时默认指向本机 24454。", lineSeparator);
         appendLine(builder, "# /zstdport voice 会修改这个值。", lineSeparator);
         appendLine(builder, "voice_chat_target=" + props.getProperty("voice_chat_target"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 语音/UDP 模组的传输方式（零配置兼容 Simple Voice Chat、Plasmo Voice 等独立端口语音）。", lineSeparator);
+        appendLine(builder, "#   tunnel（默认）：语音 UDP 也走 zstdnet 的公网入口端口（与游戏同一个端口），", lineSeparator);
+        appendLine(builder, "#                  服务端按通道拆分后转给后端各语音端口。只需对外放行入口端口一个口。", lineSeparator);
+        appendLine(builder, "#   bridge：客户端在本机直连「真实服务器同端口」的语音 UDP，服务端不额外中转；", lineSeparator);
+        appendLine(builder, "#           需要你为该语音端口单独做公网放行/端口映射。", lineSeparator);
+        appendLine(builder, "# 注意：使用本功能时，Simple Voice Chat 的 voice_host、Plasmo 的 [host.public].ip 必须留默认（空 / 0.0.0.0），", lineSeparator);
+        appendLine(builder, "# 否则客户端会按你填的公网地址直连、绕过 zstdnet（服务端会记一条 WARN 提示）。", lineSeparator);
+        appendLine(builder, "voice_transport=" + props.getProperty("voice_transport"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 额外需要透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。", lineSeparator);
+        appendLine(builder, "# 例如：extra_udp_ports=24454,30000 。留空表示只用自动探测（SVC / Plasmo）。", lineSeparator);
+        appendLine(builder, "extra_udp_ports=" + props.getProperty("extra_udp_ports"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# zstd 压缩等级（1-22，通常建议 3-9）。", lineSeparator);

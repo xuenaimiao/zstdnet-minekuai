@@ -38,7 +38,8 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
 推荐客户端和服务端都安装本模组。
 
 - 当前仓库已同步支持：
-  Forge 1.20.1、NeoForge 1.20.1、NeoForge 1.21.1、Fabric 1.20.1、Fabric 1.21.1
+  Forge 1.19.2、Forge 1.20.1、NeoForge 1.20.1、NeoForge 1.21.1、Fabric 1.20.1、Fabric 1.21.1
+- **插件端（无需 mod 加载器）**：Bukkit / Spigot / Paper / Purpur，以及 Arclight / Mohist 等混合端 —— 详见下方「[插件端 / 混合端](#插件端--混合端bukkit--spigot--paper--arclight--mohist)」
 - 普通连接远程 ZstdNet 服务器时：客户端需要安装
 - 使用内置 Zstd 服务端入口时：服务端需要安装
 - 单机开放局域网并对外分享 Zstd 入口时：房主客户端需要安装
@@ -121,6 +122,50 @@ auto_takeover=true
 如果整合包包含 Sable / 机械动力：航空学等依赖同端口 UDP 的模组，也请确保前置转发层同时转发同一个端口的 TCP 和 UDP。ZstdNet 会在客户端本地 `127.0.0.1:<本地代理端口>` 上同时监听 TCP 和 UDP，并把 UDP 原样转发到远端同端口；如果公网隧道只转发 TCP，Sable 会回退到性能较差的 TCP 管线。
 
 默认推荐直接使用 `auto_takeover=true`。这样模组会在启动时读取 `server.properties` 里的 `server-port`，把它作为公网入口 `listen`，再自动把后端 Minecraft 挪到另一个本地空闲端口 `target`，服主通常不需要再手动填写端口。
+
+## 插件端 / 混合端（Bukkit / Spigot / Paper / Arclight / Mohist）
+
+如果你的服务器是**插件端**（Paper / Spigot / Purpur，没有 mod 加载器）或**混合端**（Arclight / Mohist / CatServer 等同时吃 Forge mod 和 Bukkit 插件），可以用**插件版** `zstdnet-bukkit-<版本>.jar`。
+
+**先说重要前提**：ZSTD 压缩天生需要两端配合。插件只是「服务端那一半」，**想要压缩的玩家仍然要安装现有的 ZstdNet 客户端 mod**（Forge/NeoForge/Fabric，一字不用改）。没装 mod 的原版玩家照常直连，不受影响，只是没有 ZSTD 压缩。
+
+**和 mod 服的关键差别**：插件加载时 MC 服务器端口已经绑定，插件**没法**像 mod 那样把后端挪走、自己占用原端口。所以插件端用**独立监听端口**：
+
+```text
+原版/未装 mod 玩家  ──────────────►  MC 服务器 25565        （插件不碰这条路）
+装了 ZstdNet 的玩家 ──► 插件代理 25566 ──(解压)──► 127.0.0.1:25565 MC 后端
+```
+
+**安装步骤**：
+
+1. 把 `zstdnet-bukkit-<版本>.jar` 放进服务器的 `plugins/` 目录并启动。**同一个 jar 同时支持 1.20.1 与最新 1.21.x**。
+2. 首次启动会生成 `plugins/ZstdNet/zstdnet-server.properties`，默认：
+   ```properties
+   enabled=true
+   auto_takeover=false
+   listen=0.0.0.0:25566      # zstd 代理对外入口（= server-port + 1）
+   target=127.0.0.1:25565    # 本机 Minecraft 后端端口
+   ```
+3. 在防火墙 / 安全组放行 `listen` 端口（如 25566）。原版玩家继续用 25565。
+4. 装了 ZstdNet 客户端 mod 的玩家，在服务器列表里把地址填成 `服务器IP:25566` 即享压缩；其余压缩等级、字典、限速等配置项与 mod 服完全一致（见下方「配置文件」）。
+
+> 提示：`listen` 端口必须与 MC 的 `server-port` 不同，且空闲；需要的话自行改这一行。插件端请保持 `auto_takeover=false`。
+
+**管理指令**（需要 `zstdnet.admin` 权限，默认 OP）：
+
+```text
+/zstdnet status   查看代理状态、监听/后端端口、连接数、压缩比
+/zstdnet reload   重新读取配置并重启代理（改完配置也会在几秒内自动热重载）
+/zstdnet start    启动代理
+/zstdnet stop     停止代理
+```
+
+**混合端怎么选**：Arclight / Mohist / CatServer 等底层是 Forge/NeoForge，**既能放 mod 也能放插件**：
+
+- 最省心：直接用本插件（丢进 `plugins/`），不依赖混合端对 coremod/自动接管的兼容性。
+- 也可以用对应的 Forge/NeoForge **mod 版**（丢进 `mods/`）；但混合端可能改了端口初始化或网络栈，若 `auto_takeover` 改端口失败，请把 mod 版配置里的 `auto_takeover` 改为 `false` 并手填 `listen`/`target`，或直接改用插件版。
+
+**关于真实 IP（frp / 反代场景）**：插件端默认情况下，经代理进来的玩家在后端看来是 `127.0.0.1`（本机回环）。绝大多数服务器无影响；但若你用 frp/反代并且需要后端按 IP 封禁 / 风控 / 地理定位，目前请用平台原生的 IP 转发（Velocity 现代转发 / BungeeCord / 服务端 `proxy-protocol`）。ZstdNet 插件端的「透明真实 IP 还原」需要按服务端版本做 netty 注入、影响面是整服网络，需在真实服上充分验证，作为后续增强项暂未随本版本提供。
 
 ## FRP 典型链路
 
@@ -282,13 +327,22 @@ mc.example.com:35565
 
 如果多人游戏菜单或“对局域网开放”界面被其他模组大幅改写，理论上仍然存在兼容性风险。
 
-### Simple Voice Chat 这类语音模组能不能用？
+### Simple Voice Chat / Plasmo Voice 这类语音模组能不能用？
 
-可以，但语音流量不会走 zstd 压缩，只会在服务端做原样 UDP 转发。
+可以，而且是**零配置**的。语音流量不压缩，只做原样转发。ZstdNet 会自动探测后端常见语音模组（Simple Voice Chat、Plasmo Voice）监听的独立 UDP 端口，并把它们一起接管，玩家进服后自动在客户端本机为这些端口开监听——无需你手动填任何端口。
 
-- 如果 Simple Voice Chat 使用独立 UDP 端口，就必须显式填写 `voice_chat_listen`；`voice_chat_target` 可以留空让模组自动指向本机的 SVC 端口。
-- 如果语音 UDP 路由没有成功启动，游戏本身的 TCP 连接仍然可以正常工作，只是语音会离线。
-- 如果你想直接改 `zstdnet-server.properties` 里的语音转发项，可以用 `/zstdport voice <端口>` 修改后端语音端口，或用 `/zstdport zstdvoice <端口>` 修改公网语音入口。
+语音有两种传输方式，由服务端配置 `voice_transport` 控制：
+
+- **`tunnel`（默认）**：语音 UDP 也走 ZstdNet 的公网入口端口（和游戏同一个端口），服务端按通道拆分后转给后端各语音端口。**这样你只需要对外放行入口端口一个口**，FRP / 内网穿透也只穿一个口即可。
+- **`bridge`**：客户端在本机把语音 UDP 直连到「真实服务器的同一个端口」，服务端不额外中转。这种方式需要你**为该语音端口单独做公网放行 / 端口映射**。
+
+其它说明：
+
+- **同端口语音模组**（Sable / 机械动力：航空学，以及把 SVC 设成跟随服务器端口的情况）一直都能用——它们的 UDP 跟游戏走同一个端口，由内置 game 直通覆盖。
+- **已知边界**：如果管理员把 Simple Voice Chat 的 `voice_host` 或 Plasmo 的 `[host.public].ip` 显式填成了某个公网地址，客户端会按你填的地址直连、**绕过 ZstdNet**（服务端会打印一条 WARN 提示）。要让 ZstdNet 接管语音，请把它们留默认（空 / `0.0.0.0`）。
+- **其它 UDP 模组**：自动探测覆盖不到的，可以用 `extra_udp_ports` 手动补一份端口清单。
+- 如果语音路由没起来，游戏本身的 TCP 连接仍然正常，只是语音会离线。
+- 旧版 `voice_chat_listen` / `voice_chat_target` 仍然保留兼容；`/zstdport voice <端口>`、`/zstdport zstdvoice <端口>` 仍可手动调整。
 
 ## 配置文件
 
@@ -399,11 +453,20 @@ mc.example.com:35565
   - 单位是字节，相当于流量的"缓冲池"
   - 即使设置了限速，短时间内的突发流量也可以超过限制
 
-- `voice_chat_passthrough`：是否为 Simple Voice Chat 启用原样 UDP 转发（默认：true）
+- `voice_chat_passthrough`：是否为语音模组启用原样 UDP 转发（默认：true）
   - 语音流量不会经过 zstd 压缩
-  - 设为 false 后将完全关闭额外的语音 UDP 路由处理
+  - 设为 false 后将完全关闭语音 UDP 处理（不探测、不接管、不下发）
 
-- `voice_chat_listen`：语音的公网 UDP 入口（可选）
+- `voice_transport`：语音/UDP 模组的传输方式（默认：tunnel）
+  - `tunnel`：语音也走 ZstdNet 的公网入口端口（与游戏同一个端口），只需对外放行入口端口一个口
+  - `bridge`：客户端直连「真实服务器同端口」的语音 UDP，服务端不额外中转，需要你单独放行该 UDP 端口
+  - 使用本功能时，请把 Simple Voice Chat 的 `voice_host`、Plasmo 的 `[host.public].ip` 留默认（空 / `0.0.0.0`），否则客户端会绕过 ZstdNet
+
+- `extra_udp_ports`：额外需要透传的 UDP 端口（逗号分隔，默认：空）
+  - 用于自动探测覆盖不到的其它 UDP 模组，例如 `extra_udp_ports=24454,30000`
+  - 留空表示只用自动探测（Simple Voice Chat / Plasmo Voice）
+
+- `voice_chat_listen`：语音的公网 UDP 入口（可选，旧版手动配置）
   - 单机开房 / LAN 模式下，生成出来的默认值通常是 `0.0.0.0:24455`
   - 独立语音端口模式下必须显式填写这里
 

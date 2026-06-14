@@ -50,8 +50,6 @@ public final class DedicatedServerAutoPort {
     private static final String DEFAULT_LISTEN_HOST = "0.0.0.0";
     private static final String DEFAULT_TARGET_HOST = "127.0.0.1";
 
-    private static volatile AutoPortPlan activePlan;
-
     private DedicatedServerAutoPort() {
     }
 
@@ -60,20 +58,20 @@ public final class DedicatedServerAutoPort {
         DedicatedServerProperties current
     ) {
         if (server == null || current == null || server.isSingleplayer()) {
-            activePlan = null;
+            DedicatedAutoPortState.clear();
             return current;
         }
 
         AutoPortConfig config = loadConfig();
         if (!config.enabled) {
-            activePlan = null;
+            DedicatedAutoPortState.clear();
             return current;
         }
 
         boolean shouldForceCompressionThreshold = shouldForceCompressionThreshold();
 
         if (!config.autoTakeover) {
-            activePlan = null;
+            DedicatedAutoPortState.clear();
             DedicatedServerProperties rewritten = rewriteProperties(current, null, shouldForceCompressionThreshold);
             if (rewritten == null) {
                 LOGGER.error("[zstdnet-server] failed to force dedicated compression threshold. Keeping current server.properties values.");
@@ -93,13 +91,13 @@ public final class DedicatedServerAutoPort {
             backendPort = chooseBackendPort(publicPort, current.serverIp, config.configuredTargetPort);
         } catch (IllegalStateException e) {
             LOGGER.error("[zstdnet-server] auto takeover could not find a free backend port after reserving public port {}.", publicPort);
-            activePlan = null;
+            DedicatedAutoPortState.clear();
             return current;
         }
         DedicatedServerProperties rewritten = rewriteProperties(current, backendPort, shouldForceCompressionThreshold);
         if (rewritten == null) {
             LOGGER.error("[zstdnet-server] auto takeover could not rewrite dedicated server properties. Falling back to manual mode.");
-            activePlan = null;
+            DedicatedAutoPortState.clear();
             return current;
         }
 
@@ -108,12 +106,12 @@ public final class DedicatedServerAutoPort {
         }
 
         server.setPort(backendPort);
-        activePlan = new AutoPortPlan(
+        DedicatedAutoPortState.set(new AutoPortPlan(
             config.listenHost,
             publicPort,
             DEFAULT_TARGET_HOST,
             backendPort
-        );
+        ));
 
         try {
             persistResolvedConfig(config.listenHost, publicPort, backendPort);
@@ -150,11 +148,11 @@ public final class DedicatedServerAutoPort {
     }
 
     static AutoPortPlan activePlan() {
-        return activePlan;
+        return DedicatedAutoPortState.activePlan();
     }
 
     static void clear() {
-        activePlan = null;
+        DedicatedAutoPortState.clear();
     }
 
     private static AutoPortConfig loadConfig() {
@@ -370,14 +368,6 @@ public final class DedicatedServerAutoPort {
             return;
         }
         LOGGER.info("[zstdnet-server] keeping dedicated network-compression-threshold unchanged because server.properties has online-mode=true.");
-    }
-
-    record AutoPortPlan(
-        String listenHost,
-        int listenPort,
-        String targetHost,
-        int targetPort
-    ) {
     }
 
     private record AutoPortConfig(

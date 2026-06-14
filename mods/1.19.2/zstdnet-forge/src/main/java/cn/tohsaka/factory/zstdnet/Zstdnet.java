@@ -22,6 +22,7 @@ package cn.tohsaka.factory.zstdnet;
 import cn.tohsaka.factory.zstdnet.client.ClientProxyPublisher;
 import cn.tohsaka.factory.zstdnet.network.DictionarySync;
 import cn.tohsaka.factory.zstdnet.network.LanCompressionSync;
+import cn.tohsaka.factory.zstdnet.network.VoicePortSync;
 import cn.tohsaka.factory.zstdnet.platform.ForgePlatform;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
@@ -52,6 +53,7 @@ public class Zstdnet {
         }
         LanCompressionSync.init();
         DictionarySync.init();
+        VoicePortSync.init();
         ServerProxyBootstrap.init();
         LOGGER.info("zstdnet loaded");
     }

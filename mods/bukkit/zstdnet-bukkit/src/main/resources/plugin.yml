@@ -1,0 +1,17 @@
+name: ${mod_name}
+version: ${mod_version}
+main: cn.tohsaka.factory.zstdnet.Zstdnet
+api-version: '1.20'
+description: Transparent ZSTD compression proxy for Bukkit/Spigot/Paper and hybrid servers (minekuai.com).
+author: wish
+website: https://minekuai.com
+load: POSTWORLD
+commands:
+  zstdnet:
+    description: Manage the ZstdNet compression proxy.
+    usage: /zstdnet <status|reload|start|stop>
+    permission: zstdnet.admin
+permissions:
+  zstdnet.admin:
+    description: Allows managing the ZstdNet compression proxy.
+    default: op

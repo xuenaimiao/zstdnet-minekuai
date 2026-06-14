@@ -11,6 +11,15 @@ in `mods/common`, and a variant is just a thin loader-integration layer that pul
 > (3) provide a `Platform` impl, (4) fix the per-MC-version mixin/coremod targets. **Never edit or
 > duplicate `mods/common` to add a variant** — only touch it if the *shared* logic itself changes.
 
+> **Plugin (non-loader) variants.** For a Bukkit/Spigot/Paper plugin there is no mod loader, mixins,
+> or coremods — see `mods/bukkit/zstdnet-bukkit` as the reference. Differences from a mod variant:
+> server-only (no client layer); `BukkitPlatform.configDir()` points at the plugin data folder;
+> the bootstrap runs the proxy on a **separate listen port** (`auto_takeover=false`, written via
+> `ServerProxyConfigFile.writePluginDefaults`); `zstd-jni` is bundled with `com.gradleup.shadow`
+> instead of `jarJar`/`include`; and the source set **excludes** `server/DedicatedServerAutoPort.java`
+> (the lone `net.minecraft.*`-importing common file) — its MC-free parts live in
+> `server/AutoPortPlan` + `server/DedicatedAutoPortState`.
+
 ---
 
 ## 0. Decide the target and pick a template

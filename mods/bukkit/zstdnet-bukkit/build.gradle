@@ -1,0 +1,94 @@
+plugins {
+    id 'java'
+    id 'eclipse'
+    id 'idea'
+    id 'com.gradleup.shadow' version '8.3.5'
+}
+
+version = mod_version
+group = mod_group_id
+
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译。
+// DedicatedServerAutoPort 依赖 net.minecraft.server.dedicated.*（插件端没有、也用不到——auto_takeover 恒为 false），
+// 故从插件端源集中排除；其拆出的 MC 无关部分 AutoPortPlan / DedicatedAutoPortState 仍参与编译。
+sourceSets {
+    main {
+        java {
+            srcDir '../../common/src/main/java'
+            exclude 'cn/tohsaka/factory/zstdnet/server/DedicatedServerAutoPort.java'
+        }
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
+def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile
+def externalProjectBuildDir = new File(externalBuildRoot, 'mods/bukkit/zstdnet-bukkit').canonicalFile
+
+layout.buildDirectory.set(externalProjectBuildDir)
+
+base {
+    archivesName = 'zstdnet-bukkit'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://hub.spigotmc.org/nexus/content/repositories/snapshots/' }
+    maven { url = 'https://oss.sonatype.org/content/repositories/snapshots' }
+}
+
+dependencies {
+    compileOnly "org.spigotmc:spigot-api:${spigot_api_version}"
+    // common 核心用 slf4j 记日志；Paper/Spigot 1.20+ 运行时自带 slf4j-api（log4j-slf4j2 桥），故仅编译期依赖、不打包，避免与服务端的实现冲突。
+    compileOnly 'org.slf4j:slf4j-api:2.0.9'
+    implementation "com.github.luben:zstd-jni:${zstd_version}"
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.slf4j:slf4j-api:2.0.9'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+processResources {
+    def replaceProperties = [
+        mod_id     : mod_id,
+        mod_name   : mod_name,
+        mod_version: mod_version
+    ]
+    inputs.properties(replaceProperties)
+
+    filesMatching('plugin.yml') {
+        expand replaceProperties
+    }
+}
+
+// 把 zstd-jni 打进 fat-jar（插件无 jarJar/include 机制）。
+// 不重定位 com.github.luben.zstd：zstd-jni 按包路径加载各平台原生库，重定位会破坏原生加载。
+shadowJar {
+    archiveClassifier = ''
+}
+
+jar {
+    archiveClassifier = 'thin'
+}
+
+tasks.register('deleteThinJar', Delete) {
+    delete tasks.named('jar').flatMap { it.archiveFile }
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+    finalizedBy tasks.named('deleteThinJar')
+}

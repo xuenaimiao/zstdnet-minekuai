@@ -38,7 +38,8 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
 It is recommended to install this mod on both the client and the server.
 
 - Current versions supported in this repository:
-  Forge 1.20.1, NeoForge 1.20.1, NeoForge 1.21.1, Fabric 1.20.1, Fabric 1.21.1
+  Forge 1.19.2, Forge 1.20.1, NeoForge 1.20.1, NeoForge 1.21.1, Fabric 1.20.1, Fabric 1.21.1
+- **Plugin servers (no mod loader)**: Bukkit / Spigot / Paper / Purpur, plus hybrid servers like Arclight / Mohist — see "[Plugin & Hybrid Servers](#plugin--hybrid-servers-bukkit--spigot--paper--arclight--mohist)" below
 - When connecting to a remote ZstdNet-enabled server: the client needs it
 - When using the built-in Zstd server entry: the server needs it
 - When opening a LAN world and sharing a Zstd entry externally: the host client needs it
@@ -123,6 +124,50 @@ If you also use FRP, HAProxy, NAT traversal, or any other forwarding layer, make
 If your modpack includes Sable / Create Aeronautics or any other mod that depends on same-port UDP, make sure the forwarding layer also forwards both TCP and UDP on the same port. ZstdNet listens on both TCP and UDP at the client-side local address `127.0.0.1:<local proxy port>` and forwards UDP packets unchanged to the same remote port; if your public tunnel only forwards TCP, Sable may fall back to its slower TCP pipeline.
 
 With the default config, dedicated servers no longer need manual port planning. ZstdNet will read `server-port`, keep it as the public entry, and automatically move the backend to another free local port.
+
+## Plugin & Hybrid Servers (Bukkit / Spigot / Paper / Arclight / Mohist)
+
+If your server is a **plugin server** (Paper / Spigot / Purpur, no mod loader) or a **hybrid server** (Arclight / Mohist / CatServer, which run both Forge mods and Bukkit plugins), use the **plugin build** `zstdnet-bukkit-<version>.jar`.
+
+**Important prerequisite first**: ZSTD compression is inherently two-sided. The plugin is only the *server half* — **players who want compression still install the existing ZstdNet client mod** (Forge/NeoForge/Fabric, unchanged). Vanilla players without the mod connect normally and are unaffected; they simply get no ZSTD compression.
+
+**Key difference from a mod server**: by the time plugins load, the Minecraft server port is already bound, so the plugin **cannot** relocate the backend and take over the original port the way the mod does. The plugin therefore uses a **separate listen port**:
+
+```text
+vanilla / no-mod players ──────────────►  MC server 25565          (plugin doesn't touch this)
+players with ZstdNet      ──► plugin proxy 25566 ──(decompress)──► 127.0.0.1:25565 backend
+```
+
+**Installation**:
+
+1. Drop `zstdnet-bukkit-<version>.jar` into the server's `plugins/` folder and start. **The same jar supports both 1.20.1 and the latest 1.21.x.**
+2. First start generates `plugins/ZstdNet/zstdnet-server.properties` with defaults:
+   ```properties
+   enabled=true
+   auto_takeover=false
+   listen=0.0.0.0:25566      # zstd proxy public entry (= server-port + 1)
+   target=127.0.0.1:25565    # local Minecraft backend port
+   ```
+3. Open the `listen` port (e.g. 25566) in your firewall / security group. Vanilla players keep using 25565.
+4. Players with the ZstdNet client mod point their server-list entry at `serverIp:25566` to get compression. All other settings (compression level, dictionaries, rate limits, …) are identical to a mod server (see "Configuration Files").
+
+> Note: the `listen` port must differ from the Minecraft `server-port` and be free; edit that line if needed. Keep `auto_takeover=false` on plugin servers.
+
+**Admin commands** (require permission `zstdnet.admin`, default OP):
+
+```text
+/zstdnet status   show proxy state, listen/backend ports, connections, compression ratio
+/zstdnet reload   re-read config and restart the proxy (config edits also hot-reload within a few seconds)
+/zstdnet start    start the proxy
+/zstdnet stop     stop the proxy
+```
+
+**Hybrid servers**: Arclight / Mohist / CatServer run Forge/NeoForge underneath and accept **both mods and plugins**:
+
+- Simplest: use this plugin (drop into `plugins/`) — it does not rely on the hybrid's coremod / auto-takeover compatibility.
+- You may also use the matching Forge/NeoForge **mod build** (drop into `mods/`); but hybrids may alter port init or the network stack, so if `auto_takeover` fails to relocate the port, set `auto_takeover=false` in the mod's config and fill in `listen`/`target` manually, or just use the plugin build instead.
+
+**About real IP (frp / reverse-proxy setups)**: on plugin servers, by default a player relayed through the proxy appears to the backend as `127.0.0.1` (loopback). This is fine for most servers. If you run behind frp/reverse-proxy and need real IPs at the Minecraft layer (per-IP bans, anti-VPN, geolocation), use the platform's native IP forwarding for now (Velocity modern forwarding / BungeeCord / server `proxy-protocol`). Transparent real-IP restoration via ZstdNet on plugin servers requires per-version netty injection that affects the whole server's networking and needs validation on real servers, so it is a planned enhancement and is not shipped in this build.
 
 ## Typical FRP Chain
 
@@ -283,13 +328,22 @@ Possibly.
 
 UI-heavy menu rewrites can still cause compatibility issues.
 
-### What about Simple Voice Chat or other UDP-based voice mods?
+### What about Simple Voice Chat, Plasmo Voice or other UDP-based voice mods?
 
-Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP packets as raw passthrough on the server side.
+Yes — and it's **zero-config**. Voice audio is not compressed; it's forwarded as raw UDP. ZstdNet auto-detects the independent UDP port that common voice mods (Simple Voice Chat, Plasmo Voice) listen on, takes those ports over, and once a player joins it automatically opens matching listeners on the client's machine — you don't have to fill in any port.
 
-- If Simple Voice Chat uses its own UDP port, you must set `voice_chat_listen` explicitly. `voice_chat_target` can stay blank and will default to the local SVC port.
-- If the UDP route cannot be armed, the game TCP path still works, but voice chat may stay offline.
-- If you want to edit the `voice` passthrough entries in `zstdnet-server.properties` directly, use `/zstdport voice <port>` for the backend voice port, or `/zstdport zstdvoice <port>` for the public voice entry.
+There are two voice transport modes, controlled by the server-side `voice_transport` setting:
+
+- **`tunnel` (default)**: voice UDP also rides ZstdNet's public entry port (the same port as the game), and the server demultiplexes it to the backend voice ports. **This means you only need to expose one public port**, which is ideal for FRP/NAT-traversal setups that forward a single port.
+- **`bridge`**: the client forwards voice UDP straight to the *real server's same port* with no extra server-side hop. This requires you to **port-forward/expose that voice UDP port separately**.
+
+Notes:
+
+- **Same-port voice mods** (Sable / Create Aeronautics, and SVC configured to follow the server port) already work — their UDP shares the game port and is covered by the built-in game passthrough.
+- **Known limitation**: if an admin explicitly sets Simple Voice Chat's `voice_host` or Plasmo's `[host.public].ip` to a public address, the client connects there directly and **bypasses ZstdNet** (the server logs a WARN). Leave them at their defaults (blank / `0.0.0.0`) for ZstdNet to handle voice.
+- **Other UDP mods**: for anything auto-detection misses, list the ports manually via `extra_udp_ports`.
+- If the voice route fails to arm, the game TCP path still works; only voice goes offline.
+- The legacy `voice_chat_listen` / `voice_chat_target` keys are kept for compatibility; `/zstdport voice <port>` and `/zstdport zstdvoice <port>` still work for manual tweaks.
 
 ## Configuration Files
 
@@ -398,9 +452,18 @@ Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP
 
 - `voice_chat_passthrough`：Enable raw UDP passthrough for Simple Voice Chat (default: true)
   - Voice traffic is forwarded without zstd compression
-  - Set to false to disable voice UDP route handling entirely
+  - Set to false to disable voice UDP handling entirely (no detection, takeover, or sync)
 
-- `voice_chat_listen`：Optional public UDP entry for voice chat
+- `voice_transport`: voice/UDP mod transport mode (default: tunnel)
+  - `tunnel`: voice also rides ZstdNet's public entry port (same port as the game); only one public port needs exposing
+  - `bridge`: the client connects voice UDP straight to the real server's same port; you must expose that UDP port separately
+  - Keep Simple Voice Chat's `voice_host` and Plasmo's `[host.public].ip` at their defaults (blank / `0.0.0.0`), or the client will bypass ZstdNet
+
+- `extra_udp_ports`: additional UDP ports to pass through (comma-separated, default: empty)
+  - For other UDP mods that auto-detection misses, e.g. `extra_udp_ports=24454,30000`
+  - Empty means auto-detection only (Simple Voice Chat / Plasmo Voice)
+
+- `voice_chat_listen`：Optional public UDP entry for voice chat (legacy manual config)
   - In singleplayer/LAN mode, the generated default is usually `0.0.0.0:24455`
   - In separate-port mode, this must be set explicitly
 
