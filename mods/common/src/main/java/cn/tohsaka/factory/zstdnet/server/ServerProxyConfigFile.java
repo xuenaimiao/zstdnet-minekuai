@@ -374,7 +374,7 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "transform_max_version=" + props.getProperty("transform_max_version"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
-        appendLine(builder, "# 合并窗口毫秒：>0 时把多个 flush 窗口合并成更大的块换取更高压缩率，代价是至多这么多毫秒的额外延迟。0=关。", lineSeparator);
+        appendLine(builder, "# 合并窗口毫秒（预留，暂未启用）：未来用于把多个 flush 窗口合并成更大的块换取更高压缩率。当前恒按 0 处理。", lineSeparator);
         appendLine(builder, "transform_coalesce_ms=" + props.getProperty("transform_coalesce_ms"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 

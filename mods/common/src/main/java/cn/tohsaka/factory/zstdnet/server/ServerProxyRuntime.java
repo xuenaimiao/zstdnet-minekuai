@@ -32,6 +32,7 @@ import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
 import cn.tohsaka.factory.zstdnet.core.stats.TrafficStats;
+import cn.tohsaka.factory.zstdnet.core.transform.EntityPacketTable;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformFormat;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformHandshake;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
@@ -497,12 +498,14 @@ final class ServerProxyRuntime {
                 // 因后端只有在收到我方转发的握手后才会回数据，所以此处读握手不会与 s2c 抢跑。
                 ZstdInputStream upstreamDecompressor = null;
                 int clientTransformVersion = 0;
+                int clientProtocolVersion = 0;
                 try {
                     upstreamDecompressor = ZstdStreams.newDecompressor(
                         new CountingInputStream(pushIn, stats::addZstdUp), cfg.compression, upstreamDict);
                     byte[] firstPacket = PacketIo.readPacket(upstreamDecompressor);
                     HandshakeRewrite rewrite = rewriteLoginHandshake(firstPacket, backendSourceIp);
                     clientTransformVersion = rewrite.transformVersion();
+                    clientProtocolVersion = rewrite.protocolVersion();
                     if (firstPacket.length > 0) {
                         OutputStream upstreamOut = upstream.getOutputStream();
                         PacketIo.writePacket(upstreamOut, rewrite.packet());
@@ -529,6 +532,10 @@ final class ServerProxyRuntime {
                     ? Math.min(clientTransformVersion, Math.min(cfg.transform.maxVersion(), TransformFormat.MAX_SUPPORTED_VERSION))
                     : 0;
                 final boolean doTransformDownstream = transformVersion >= TransformFormat.VERSION_LAYER_A;
+                // B1/B2 需按 MC 协议版本选实体包表；缺表时编码端自动退化为 Layer A（仍受益于去交错）。
+                final EntityPacketTable transformTable = transformVersion >= TransformFormat.VERSION_B1
+                    ? EntityPacketTable.forProtocol(clientProtocolVersion)
+                    : null;
 
                 final ZstdInputStream c2sDecompressor = upstreamDecompressor;
                 Future<Exception> c2s = workers.submit(() -> {
@@ -544,7 +551,7 @@ final class ServerProxyRuntime {
 
                 Future<Exception> s2c = workers.submit(() -> {
                     try {
-                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion);
+                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion, transformTable);
                         return null;
                     } catch (Exception ex) {
                         return ex;
@@ -714,8 +721,11 @@ final class ServerProxyRuntime {
         }
     }
 
-    /** 握手改写结果：改写后的握手包 + 客户端 advertise 的 transform 版本（0 表示无）。 */
-    private record HandshakeRewrite(byte[] packet, int transformVersion) {
+    /**
+     * 握手改写结果：改写后的握手包 + 客户端 advertise 的 transform 版本（0 表示无） +
+     * 客户端 MC 协议版本号（用于选实体包表；0 表示未知/解析失败）。
+     */
+    private record HandshakeRewrite(byte[] packet, int transformVersion, int protocolVersion) {
     }
 
     /**
@@ -724,34 +734,34 @@ final class ServerProxyRuntime {
      */
     private HandshakeRewrite rewriteLoginHandshake(byte[] handshakePayload, String sourceIp) {
         if (handshakePayload == null || handshakePayload.length == 0) {
-            return new HandshakeRewrite(handshakePayload, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0);
         }
 
         VarIntRead packetId = VarIntCodec.read(handshakePayload, 0, handshakePayload.length);
         if (packetId == null || packetId.value() != 0) {
-            return new HandshakeRewrite(handshakePayload, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0);
         }
 
         VarIntRead protocol = VarIntCodec.read(handshakePayload, packetId.next(), handshakePayload.length);
         if (protocol == null) {
-            return new HandshakeRewrite(handshakePayload, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0);
         }
 
         VarIntRead hostLength = VarIntCodec.read(handshakePayload, protocol.next(), handshakePayload.length);
         if (hostLength == null || hostLength.value() < 0) {
-            return new HandshakeRewrite(handshakePayload, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0);
         }
 
         int hostStart = hostLength.next();
         int hostEnd = hostStart + hostLength.value();
         int portEnd = hostEnd + 2;
         if (portEnd > handshakePayload.length) {
-            return new HandshakeRewrite(handshakePayload, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0);
         }
 
         VarIntRead nextState = VarIntCodec.read(handshakePayload, portEnd, handshakePayload.length);
         if (nextState == null || nextState.value() != 2) {
-            return new HandshakeRewrite(handshakePayload, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0);
         }
 
         String originalHost = new String(handshakePayload, hostStart, hostLength.value(), StandardCharsets.UTF_8);
@@ -764,7 +774,7 @@ final class ServerProxyRuntime {
         byte[] hostBytes = forwardedHost.getBytes(StandardCharsets.UTF_8);
         if (hostBytes.length > 255) {
             LOGGER.warn("[zstdnet-server] skipped forwarded handshake host rewrite for {} because host is too long: {} bytes", sourceIp, hostBytes.length);
-            return new HandshakeRewrite(handshakePayload, transformVersion);
+            return new HandshakeRewrite(handshakePayload, transformVersion, protocol.value());
         }
 
         if (sourceIp != null && !sourceIp.isBlank()) {
@@ -777,7 +787,7 @@ final class ServerProxyRuntime {
             hostBytes,
             ByteArrayOps.slice(handshakePayload, hostEnd, handshakePayload.length)
         );
-        return new HandshakeRewrite(rebuilt, transformVersion);
+        return new HandshakeRewrite(rebuilt, transformVersion, protocol.value());
     }
 
     private static String appendForwardedIpMarker(String originalHost, String sourceIp) {
@@ -830,7 +840,8 @@ final class ServerProxyRuntime {
         CompressionOptions options,
         boolean useDictionary,
         boolean transform,
-        int transformVersion
+        int transformVersion,
+        EntityPacketTable transformTable
     ) throws IOException {
         OutputStream limitedDst = new RateLimitedOutputStream(dst, perConnLimiter, globalLimiter);
         DictionarySampler sampler = this.dictionarySampler;
@@ -838,7 +849,8 @@ final class ServerProxyRuntime {
         ZstdOutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary);
         // 变换层位于 ZSTD 之前：开启时把后端字节去交错后再喂给 zstdOut。关闭时 sink 即 zstdOut，行为与历史一致。
         // 关闭 sink 会级联落定剩余帧并关闭 zstdOut；跨 block 列匹配依赖 zstdOut 的连续帧（见 ZstdStreams）。
-        OutputStream sink = transform ? new TransformingOutputStream(zstdOut, transformVersion) : zstdOut;
+        // transformTable 非空（B1/B2）→ 按帧去交错；为空（仅 Layer A 或缺协议表）→ TransformingOutputStream 自动退化。
+        OutputStream sink = transform ? new TransformingOutputStream(zstdOut, transformVersion, transformTable) : zstdOut;
         try (sink) {
             InputStream srcIn = src.getInputStream();
             byte[] buf = new byte[16 * 1024];

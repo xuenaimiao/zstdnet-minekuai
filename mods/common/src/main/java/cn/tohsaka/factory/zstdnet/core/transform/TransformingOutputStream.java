@@ -37,13 +37,27 @@ public final class TransformingOutputStream extends OutputStream {
     private final OutputStream out;
     private final PacketFramer framer = new PacketFramer();
     private final int version;
+    private final EntityPacketTable table;
+    private final boolean useLayerB;
     private final byte[] one = new byte[1];
     private boolean preambleWritten = false;
     private boolean closed = false;
 
+    /** 仅 Layer A（无 packet 表）。 */
     public TransformingOutputStream(OutputStream out, int version) {
+        this(out, version, null);
+    }
+
+    /**
+     * @param version 协商生效的变换版本（写入 PREAMBLE）；&ge;{@link TransformFormat#VERSION_B1} 且
+     *                {@code table} 非空时启用 Layer B 按帧去交错，否则仅 Layer A。
+     * @param table   编码端实体包表（按 MC 协议版本解析；可为 {@code null} → 退化 Layer A）。解码端不需要。
+     */
+    public TransformingOutputStream(OutputStream out, int version, EntityPacketTable table) {
         this.out = out;
         this.version = version;
+        this.table = table;
+        this.useLayerB = version >= TransformFormat.VERSION_B1 && table != null && !table.isEmpty();
     }
 
     @Override
@@ -65,10 +79,18 @@ public final class TransformingOutputStream extends OutputStream {
         PacketFramer.Batch batch = framer.peelComplete();
         if (batch != null) {
             ensurePreamble();
-            StreamTransformCodec.encodeLayerABlock(batch, out);
+            encodeBatch(batch);
             framer.consume(batch);
         }
         out.flush();
+    }
+
+    private void encodeBatch(PacketFramer.Batch batch) throws IOException {
+        if (useLayerB) {
+            StreamTransformCodec.encodeLayerBBlock(batch, out, version, table);
+        } else {
+            StreamTransformCodec.encodeLayerABlock(batch, out);
+        }
     }
 
     @Override
@@ -81,7 +103,11 @@ public final class TransformingOutputStream extends OutputStream {
             PacketFramer.Batch batch = framer.peelComplete();
             if (batch != null) {
                 ensurePreamble();
-                StreamTransformCodec.encodeLayerABlock(batch, underlying);
+                if (useLayerB) {
+                    StreamTransformCodec.encodeLayerBBlock(batch, underlying, version, table);
+                } else {
+                    StreamTransformCodec.encodeLayerABlock(batch, underlying);
+                }
                 framer.consume(batch);
             }
             if (framer.hasRemainder()) {

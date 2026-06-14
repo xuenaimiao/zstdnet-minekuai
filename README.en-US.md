@@ -347,6 +347,18 @@ Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP
 - `dictionary_train`：(Manual build) One-shot training. Set to true and save to train `dict/trained.dict` from `samples/` (default: false)
   - Afterwards set `dictionary=trained.dict`, `dictionary_train=false`. Not needed when `dictionary_auto=true`
 
+- `transform`：Entity packet-stream transform, for entity/mob-heavy scenes (default: false)
+  - Before ZSTD, applies a **reversible de-interleaving** to the server→client stream: entity move/rotation/velocity fields and the high-repetition payloads of many similar mobs are grouped together, markedly improving compression for Create contraptions, mob farms/raids, etc.
+  - **Only takes effect on a connection when the client also has `transform=true` and advertises support**; byte-for-byte compatible with un-upgraded / disabled clients (auto falls back to passthrough)
+  - Dictionary connections prefer the dictionary (no transform on those); the two don't conflict
+  - Correctness does not depend on the built-in packet table: a missing/wrong table only costs ratio, never corrupts (fail-closed)
+
+- `transform_max_version`：Highest transform version (default: 3; effective = min of client/server)
+  - `1`=version-agnostic de-interleaving only; `2`=+entity-move SoA columns; `3`=+mob-packet grouping
+  - Versions 2/3 (entity-level gains) apply on covered MC versions (1.19.2 / 1.20.1 / 1.21.1); other versions auto-degrade to 1
+
+- `transform_coalesce_ms`：(Reserved, not yet active) coalesce window in ms, currently always treated as 0 (default: 0)
+
 - `max_conn_per_ip`：Maximum simultaneous connections per IP (default: 9999)
   - Set to 0 or negative to disable limit
   - Prevents a single IP from using too many connections
@@ -417,6 +429,10 @@ Simple Voice Chat audio is not compressed by zstd. ZstdNet only forwards the UDP
 - `window_log`：LDM window exponent (default: 0 = conservative 24); only set >27 if the target server uses it too
 - `dictionary`：Manual dictionary file under `config/zstdnet/dict/` (default: empty)
   - Usually unnecessary: dictionaries are auto-downloaded from servers that use them
+- `transform`：Enable the entity packet-stream transform for servers that support it (default: false)
+  - When enabled, the client advertises support in the handshake and installs a reverse decoder for the server→client stream
+  - The connection is only actually transformed when the target server also has `transform=true`; otherwise it stays byte-for-byte compatible passthrough
+  - Aimed at entity/mob-heavy servers (Create contraptions, mob farms), cutting downstream bandwidth substantially in those scenes
 
 ## Compression Tuning & Dictionaries
 
@@ -424,6 +440,17 @@ All of the options below are opt-in and off by default — the defaults keep the
 
 ### Long-distance matching (LDM)
 For servers where the same large structures repeat over minutes (Create-based / large modpacks), set `long_distance_matching=true` (optionally `window_log=25`) on the server. With `window_log` ≤ 27 this is decodable by existing clients with no client update. Cost: roughly `2^window_log` bytes of memory per direction per connection, which adds up on a busy server — hence off by default.
+
+### Entity packet-stream transform (for entity/mob-heavy servers)
+When a server has **many entities** (Create contraptions moving at constant velocity, mob farms/raids packed with similar mobs), the high-repetition fields inside entity move/rotation/velocity packets and mob metadata are **interleaved** with structural bytes, so ZSTD can't match across packets and compression suffers.
+
+With the transform enabled, the proxy applies a **reversible de-interleaving** to the server→client stream **before** feeding ZSTD: same-field values are grouped into contiguous columns (all entities' Δx together, entity IDs together, similar mobs' metadata placed adjacently), then **byte-exactly reconstructed** after decompression. Cross-tick repetition of the same field becomes a long match ZSTD can hit directly, leveraging the continuous frame (match history is kept across flushes) for a large ratio gain.
+
+Usage: set **`transform=true` on both server and client** (off by default). Notes:
+- With it off, behavior is byte-for-byte identical to before; if either side is un-upgraded / disabled, that connection auto-falls back to passthrough with no impact on connectivity or gameplay.
+- Correctness does not depend on the built-in packet table: the table only guides the encoder's split; a missing/wrong table only costs ratio, never corrupts (fail-closed).
+- Dictionary connections prefer the dictionary (no transform there); the two don't conflict.
+- Entity-level gains (versions 2/3) cover 1.19.2 / 1.20.1 / 1.21.1; other versions auto-degrade to version-agnostic de-interleaving (version 1).
 
 ### Dictionaries (zero-config auto-distribution)
 A trained ZSTD dictionary gives the biggest gain for the login burst (registry/tags/recipes) and for streams of small, similar packets (entity moves, block updates).
