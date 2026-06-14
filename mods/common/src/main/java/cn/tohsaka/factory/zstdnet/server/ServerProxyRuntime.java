@@ -32,6 +32,10 @@ import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
 import cn.tohsaka.factory.zstdnet.core.stats.TrafficStats;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformFormat;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformHandshake;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformingOutputStream;
 import com.github.luben.zstd.ZstdInputStream;
 import com.github.luben.zstd.ZstdOutputStream;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
@@ -488,9 +492,48 @@ final class ServerProxyRuntime {
                 final String backendSourceIp = forwardedSourceIp;
                 final byte[] upstreamDict = decompressDict;
                 final boolean downstreamDict = compressWithDict;
+
+                // 在派发双向泵之前同步读首包（握手），提取并剥离客户端 transform 能力标记，再决定下行是否变换。
+                // 因后端只有在收到我方转发的握手后才会回数据，所以此处读握手不会与 s2c 抢跑。
+                ZstdInputStream upstreamDecompressor = null;
+                int clientTransformVersion = 0;
+                try {
+                    upstreamDecompressor = ZstdStreams.newDecompressor(
+                        new CountingInputStream(pushIn, stats::addZstdUp), cfg.compression, upstreamDict);
+                    byte[] firstPacket = PacketIo.readPacket(upstreamDecompressor);
+                    HandshakeRewrite rewrite = rewriteLoginHandshake(firstPacket, backendSourceIp);
+                    clientTransformVersion = rewrite.transformVersion();
+                    if (firstPacket.length > 0) {
+                        OutputStream upstreamOut = upstream.getOutputStream();
+                        PacketIo.writePacket(upstreamOut, rewrite.packet());
+                        stats.addRawUp(VarIntCodec.encode(rewrite.packet().length).length + rewrite.packet().length);
+                    }
+                } catch (Exception handshakeErr) {
+                    if (upstreamDecompressor != null) {
+                        try {
+                            upstreamDecompressor.close();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (isRealPipeErr(handshakeErr)) {
+                        LOGGER.warn("[server] handshake read error source={}: {}", guardIp, handshakeErr.toString());
+                    }
+                    return;
+                }
+
+                // 下行是否变换：服务端开关 + 客户端 advertise；字典连接优先用字典（关变换），避免二者冲突。
+                boolean transformDownstream = cfg.transform.enabled()
+                    && clientTransformVersion >= TransformFormat.VERSION_LAYER_A
+                    && !downstreamDict;
+                final int transformVersion = transformDownstream
+                    ? Math.min(clientTransformVersion, Math.min(cfg.transform.maxVersion(), TransformFormat.MAX_SUPPORTED_VERSION))
+                    : 0;
+                final boolean doTransformDownstream = transformVersion >= TransformFormat.VERSION_LAYER_A;
+
+                final ZstdInputStream c2sDecompressor = upstreamDecompressor;
                 Future<Exception> c2s = workers.submit(() -> {
                     try {
-                        forwardDecompress(upstream, pushIn, stats, backendSourceIp, cfg.compression, upstreamDict);
+                        pumpDecompress(upstream, c2sDecompressor, stats);
                         return null;
                     } catch (Exception ex) {
                         return ex;
@@ -501,7 +544,7 @@ final class ServerProxyRuntime {
 
                 Future<Exception> s2c = workers.submit(() -> {
                     try {
-                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict);
+                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion);
                         return null;
                     } catch (Exception ex) {
                         return ex;
@@ -654,18 +697,12 @@ final class ServerProxyRuntime {
     }
 
     /**
-     * Client -> backend: decompress zstd traffic before forwarding to Minecraft.
+     * Client -> backend: 持续解压 zstd 流并透传到后端。握手首包已在 {@link #handleClient} 中读出并转发，
+     * 这里只负责其余字节的解压循环。
      */
-    private void forwardDecompress(Socket dst, InputStream src, TrafficStats stats, String sourceIp, CompressionOptions options, byte[] dictionary) throws IOException {
-        try (ZstdInputStream zstdIn = ZstdStreams.newDecompressor(new CountingInputStream(src, stats::addZstdUp), options, dictionary)) {
+    private void pumpDecompress(Socket dst, ZstdInputStream zstdIn, TrafficStats stats) throws IOException {
+        try (zstdIn) {
             OutputStream dstOut = dst.getOutputStream();
-            byte[] firstPacket = PacketIo.readPacket(zstdIn);
-            if (firstPacket.length > 0) {
-                byte[] forwardedHandshake = appendForwardedIpToHandshake(firstPacket, sourceIp);
-                PacketIo.writePacket(dstOut, forwardedHandshake);
-                stats.addRawUp(VarIntCodec.encode(forwardedHandshake.length).length + forwardedHandshake.length);
-            }
-
             byte[] buf = new byte[16 * 1024];
             int n;
             while ((n = zstdIn.read(buf)) >= 0) {
@@ -677,54 +714,70 @@ final class ServerProxyRuntime {
         }
     }
 
-    private byte[] appendForwardedIpToHandshake(byte[] handshakePayload, String sourceIp) {
-        if (handshakePayload == null || handshakePayload.length == 0 || sourceIp == null || sourceIp.isBlank()) {
-            return handshakePayload;
+    /** 握手改写结果：改写后的握手包 + 客户端 advertise 的 transform 版本（0 表示无）。 */
+    private record HandshakeRewrite(byte[] packet, int transformVersion) {
+    }
+
+    /**
+     * 处理登录握手首包：解析 host，提取并剥离客户端 transform 能力标记（不让后端看到），
+     * 再追加真实 IP 标记。非登录握手 / 解析失败时原样返回且版本为 0。
+     */
+    private HandshakeRewrite rewriteLoginHandshake(byte[] handshakePayload, String sourceIp) {
+        if (handshakePayload == null || handshakePayload.length == 0) {
+            return new HandshakeRewrite(handshakePayload, 0);
         }
 
         VarIntRead packetId = VarIntCodec.read(handshakePayload, 0, handshakePayload.length);
         if (packetId == null || packetId.value() != 0) {
-            return handshakePayload;
+            return new HandshakeRewrite(handshakePayload, 0);
         }
 
         VarIntRead protocol = VarIntCodec.read(handshakePayload, packetId.next(), handshakePayload.length);
         if (protocol == null) {
-            return handshakePayload;
+            return new HandshakeRewrite(handshakePayload, 0);
         }
 
         VarIntRead hostLength = VarIntCodec.read(handshakePayload, protocol.next(), handshakePayload.length);
         if (hostLength == null || hostLength.value() < 0) {
-            return handshakePayload;
+            return new HandshakeRewrite(handshakePayload, 0);
         }
 
         int hostStart = hostLength.next();
         int hostEnd = hostStart + hostLength.value();
         int portEnd = hostEnd + 2;
         if (portEnd > handshakePayload.length) {
-            return handshakePayload;
+            return new HandshakeRewrite(handshakePayload, 0);
         }
 
         VarIntRead nextState = VarIntCodec.read(handshakePayload, portEnd, handshakePayload.length);
         if (nextState == null || nextState.value() != 2) {
-            return handshakePayload;
+            return new HandshakeRewrite(handshakePayload, 0);
         }
 
         String originalHost = new String(handshakePayload, hostStart, hostLength.value(), StandardCharsets.UTF_8);
-        String forwardedHost = appendForwardedIpMarker(originalHost, sourceIp);
+        int transformVersion = TransformHandshake.parseVersion(originalHost);
+        String cleanedHost = TransformHandshake.strip(originalHost);
+        String forwardedHost = (sourceIp != null && !sourceIp.isBlank())
+            ? appendForwardedIpMarker(cleanedHost, sourceIp)
+            : cleanedHost;
+
         byte[] hostBytes = forwardedHost.getBytes(StandardCharsets.UTF_8);
         if (hostBytes.length > 255) {
-            LOGGER.warn("[zstdnet-server] skipped forwarded real IP for {} because forwarded handshake host is too long: {} bytes", sourceIp, hostBytes.length);
-            return handshakePayload;
+            LOGGER.warn("[zstdnet-server] skipped forwarded handshake host rewrite for {} because host is too long: {} bytes", sourceIp, hostBytes.length);
+            return new HandshakeRewrite(handshakePayload, transformVersion);
         }
 
-        LOGGER.info("[zstdnet-server] appended forwarded real IP {} to login handshake host '{}'", sourceIp, originalHost);
+        if (sourceIp != null && !sourceIp.isBlank()) {
+            LOGGER.info("[zstdnet-server] appended forwarded real IP {} to login handshake host '{}'", sourceIp, cleanedHost);
+        }
 
-        return ByteArrayOps.concat(
+        byte[] rebuilt = ByteArrayOps.concat(
             ByteArrayOps.slice(handshakePayload, 0, protocol.next()),
             VarIntCodec.encode(hostBytes.length),
             hostBytes,
             ByteArrayOps.slice(handshakePayload, hostEnd, handshakePayload.length)
         );
+        return new HandshakeRewrite(rebuilt, transformVersion);
     }
 
     private static String appendForwardedIpMarker(String originalHost, String sourceIp) {
@@ -775,12 +828,18 @@ final class ServerProxyRuntime {
         TokenBucketLimiter perConnLimiter,
         TokenBucketLimiter globalLimiter,
         CompressionOptions options,
-        boolean useDictionary
+        boolean useDictionary,
+        boolean transform,
+        int transformVersion
     ) throws IOException {
         OutputStream limitedDst = new RateLimitedOutputStream(dst, perConnLimiter, globalLimiter);
         DictionarySampler sampler = this.dictionarySampler;
         DictionarySampler.Collector sampleCollector = sampler != null ? sampler.newCollector() : null;
-        try (ZstdOutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary)) {
+        ZstdOutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary);
+        // 变换层位于 ZSTD 之前：开启时把后端字节去交错后再喂给 zstdOut。关闭时 sink 即 zstdOut，行为与历史一致。
+        // 关闭 sink 会级联落定剩余帧并关闭 zstdOut；跨 block 列匹配依赖 zstdOut 的连续帧（见 ZstdStreams）。
+        OutputStream sink = transform ? new TransformingOutputStream(zstdOut, transformVersion) : zstdOut;
+        try (sink) {
             InputStream srcIn = src.getInputStream();
             byte[] buf = new byte[16 * 1024];
             final long flushIntervalNs = Math.max(0L, flushInterval.toNanos());
@@ -813,7 +872,7 @@ final class ServerProxyRuntime {
                         n = srcIn.read(buf);
                     } catch (SocketTimeoutException timeout) {
                         if (flushIntervalNs > 0L && hasPending && (System.nanoTime() - lastFlushNs) >= flushIntervalNs) {
-                            zstdOut.flush();
+                            sink.flush();
                             hasPending = false;
                             lastFlushNs = System.nanoTime();
                         }
@@ -831,10 +890,10 @@ final class ServerProxyRuntime {
                     if (sampleCollector != null) {
                         sampleCollector.accept(buf, 0, n);
                     }
-                    zstdOut.write(buf, 0, n);
+                    sink.write(buf, 0, n);
                     hasPending = true;
                     if (flushIntervalNs == 0L || (System.nanoTime() - lastFlushNs) >= flushIntervalNs) {
-                        zstdOut.flush();
+                        sink.flush();
                         hasPending = false;
                         lastFlushNs = System.nanoTime();
                     }
@@ -846,7 +905,7 @@ final class ServerProxyRuntime {
                 }
             }
 
-            zstdOut.flush();
+            sink.flush();
         }
     }
 
@@ -1289,6 +1348,7 @@ final class ServerProxyRuntime {
         boolean trustProxyProtocol = Boolean.parseBoolean(props.getProperty("trust_proxy_protocol", "false").trim());
         Set<String> trustedProxyIps = parseTrustedProxyIps(props.getProperty("trusted_proxy_ips", DEFAULT_TRUSTED_PROXY_IPS));
         CompressionOptions compression = loadCompressionOptions(props, path);
+        TransformOptions transform = loadTransformOptions(props);
         setupDictionaryTooling(props, path);
         if (flushInterval.isNegative()) {
             flushInterval = Duration.ZERO;
@@ -1327,7 +1387,8 @@ final class ServerProxyRuntime {
             burstBytes,
             trustProxyProtocol,
             trustedProxyIps,
-            compression
+            compression,
+            transform
         );
     }
 
@@ -1367,6 +1428,20 @@ final class ServerProxyRuntime {
             );
         }
         return compression;
+    }
+
+    /**
+     * 解析实体包流变换参数（{@code transform} / {@code transform_max_version} / {@code transform_coalesce_ms}）。
+     * 默认关闭——返回 {@link TransformOptions#disabled()} 时下行不安装任何变换包装，与历史逐字节一致。
+     */
+    private TransformOptions loadTransformOptions(Properties props) {
+        boolean enabled = Boolean.parseBoolean(props.getProperty("transform", "false").trim());
+        if (!enabled) {
+            return TransformOptions.disabled();
+        }
+        int maxVersion = parseInt(props.getProperty("transform_max_version"), TransformFormat.VERSION_B2);
+        int coalesceMs = parseInt(props.getProperty("transform_coalesce_ms"), 0);
+        return TransformOptions.enabled(maxVersion, coalesceMs);
     }
 
     /**
@@ -2123,7 +2198,8 @@ final class ServerProxyRuntime {
         int burstBytes,
         boolean trustProxyProtocol,
         Set<String> trustedProxyIps,
-        CompressionOptions compression
+        CompressionOptions compression,
+        TransformOptions transform
     ) {
         private ProxyConfig withTarget(HostPort newTarget) {
             return new ProxyConfig(
@@ -2147,7 +2223,8 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                compression
+                compression,
+                transform
             );
         }
 
@@ -2173,7 +2250,8 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                newCompression
+                newCompression,
+                transform
             );
         }
 
@@ -2199,7 +2277,8 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                compression
+                compression,
+                transform
             );
         }
 
@@ -2233,7 +2312,8 @@ final class ServerProxyRuntime {
                 burstBytes,
                 trustProxyProtocol,
                 trustedProxyIps,
-                compression
+                compression,
+                transform
             );
         }
 

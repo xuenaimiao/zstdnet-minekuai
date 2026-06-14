@@ -26,6 +26,9 @@ import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
 import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformHandshake;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
+import cn.tohsaka.factory.zstdnet.core.transform.UntransformingInputStream;
 import com.github.luben.zstd.ZstdInputStream;
 import com.github.luben.zstd.ZstdOutputStream;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
@@ -69,6 +72,10 @@ public final class LocalZstdNet {
         return t;
     });
 
+    // 客户端变换偏好（实体包流去交错）。默认关闭=不 advertise、不安装逆向包装，与历史逐字节一致、零开销。
+    // 全局而非逐连接：一个游戏实例只有一份客户端配置。各变体在客户端配置(重)加载时调用 configureClientTransform。
+    private static volatile TransformOptions clientTransform = TransformOptions.disabled();
+
     public enum Mode {
         AUTO,
         RAW,
@@ -76,6 +83,11 @@ public final class LocalZstdNet {
     }
 
     private LocalZstdNet() {
+    }
+
+    /** 设置客户端变换偏好（由各变体在客户端配置加载时调用）；null 视为关闭。 */
+    public static void configureClientTransform(TransformOptions options) {
+        clientTransform = options == null ? TransformOptions.disabled() : options;
     }
 
     public static ProxyHandle start(String remoteHost, int remotePort, int level, Mode requestedMode) throws IOException {
@@ -444,7 +456,9 @@ public final class LocalZstdNet {
                     options,
                     clientDict
                 )) {
-                    StreamTransfer.copyAndFlush(zstdIn, new CountingOutputStream(client.getOutputStream(), stats::addServerToClientRaw));
+                    // 启用变换时套上逆向包装；MAGIC 自检：若服务端实际未变换则原样透传，不破坏字节。
+                    InputStream downstream = clientTransform.enabled() ? new UntransformingInputStream(zstdIn) : zstdIn;
+                    StreamTransfer.copyAndFlush(downstream, new CountingOutputStream(client.getOutputStream(), stats::addServerToClientRaw));
                 } catch (Exception ignored) {
                 } finally {
                     try {
@@ -573,6 +587,11 @@ public final class LocalZstdNet {
 
         String originalHost = new String(handshakePayload, hostStart, hostLength.value(), StandardCharsets.UTF_8);
         String hostSuffix = Platforms.get().adjustHandshakeHostSuffix(extractHandshakeHostSuffix(originalHost));
+        // advertise 本端支持的最高变换版本（服务端据此决定是否对下行变换）。默认关闭时不追加，握手与历史一致。
+        TransformOptions ct = clientTransform;
+        if (ct.enabled()) {
+            hostSuffix = hostSuffix + TransformHandshake.advertiseSuffix(ct.maxVersion());
+        }
         byte[] hostBytes = (host + hostSuffix).getBytes(StandardCharsets.UTF_8);
         return ByteArrayOps.concat(
             ByteArrayOps.slice(handshakePayload, 0, protocol.next()),

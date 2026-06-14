@@ -55,6 +55,9 @@ public final class ServerProxyConfigFile {
         "level",
         "long_distance_matching",
         "window_log",
+        "transform",
+        "transform_max_version",
+        "transform_coalesce_ms",
         "dictionary",
         "dictionary_auto",
         "dictionary_capture",
@@ -245,6 +248,9 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("level", "9");
         props.putIfAbsent("long_distance_matching", "false");
         props.putIfAbsent("window_log", "0");
+        props.putIfAbsent("transform", "false");
+        props.putIfAbsent("transform_max_version", "3");
+        props.putIfAbsent("transform_coalesce_ms", "0");
         props.putIfAbsent("dictionary", "");
         props.putIfAbsent("dictionary_auto", "false");
         props.putIfAbsent("dictionary_capture", "false");
@@ -354,6 +360,22 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "# 仅在 long_distance_matching=true 时生效。<=27 的帧任何客户端都能解码，对现有客户端线兼容；", lineSeparator);
         appendLine(builder, "# >27 需要客户端同步开启 long_distance_matching/window_log，否则会解码失败。", lineSeparator);
         appendLine(builder, "window_log=" + props.getProperty("window_log"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# ===== 实体包流变换（面向大量实体/生物，默认关闭）=====", lineSeparator);
+        appendLine(builder, "# transform=true：在 ZSTD 之前对“服务端→客户端”的包流做可逆去交错，把实体移动/转头/速度以及", lineSeparator);
+        appendLine(builder, "# 大量相似生物的元数据等高重复字段聚到一起，显著提升机械动力契约体、刷怪塔等高实体场景的压缩率。", lineSeparator);
+        appendLine(builder, "# 仅在客户端也支持并 advertise 时才对该连接生效；对未升级客户端逐字节兼容、自动回退原样转发。", lineSeparator);
+        appendLine(builder, "# 注意：使用字典的连接会优先走字典（该连接不变换），二者不冲突。", lineSeparator);
+        appendLine(builder, "transform=" + props.getProperty("transform"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 变换最高版本：1=仅版本无关的去交错；2=+实体移动 SoA；3=+生物包分组。生效版本取两端较小值。", lineSeparator);
+        appendLine(builder, "transform_max_version=" + props.getProperty("transform_max_version"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 合并窗口毫秒：>0 时把多个 flush 窗口合并成更大的块换取更高压缩率，代价是至多这么多毫秒的额外延迟。0=关。", lineSeparator);
+        appendLine(builder, "transform_coalesce_ms=" + props.getProperty("transform_coalesce_ms"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# ===== 字典（开启可显著提升压缩率，全部默认关闭）=====", lineSeparator);
