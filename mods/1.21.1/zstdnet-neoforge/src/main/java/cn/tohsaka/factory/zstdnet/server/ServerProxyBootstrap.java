@@ -104,7 +104,7 @@ public final class ServerProxyBootstrap {
         if (!event.getServer().isDedicatedServer()) {
             return;
         }
-        DedicatedServerAutoPort.AutoPortPlan plan = DedicatedServerAutoPort.activePlan();
+        AutoPortPlan plan = DedicatedServerAutoPort.activePlan();
         if (plan != null) {
             LOGGER.info(
                 "[zstdnet-server] public entry is {}:{}, backend was reassigned to {}:{}",

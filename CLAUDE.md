@@ -17,10 +17,10 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is six parallel, independent mod projects
-(each with its own `build.gradle` / `settings.gradle` — there is no root settings.gradle),
-plus a shared **`mods/common`** source-only module that is the single source of truth for the
-loader-agnostic core:
+This is **not a single Gradle project**. It is seven parallel, independent projects
+(six mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
+— there is no root settings.gradle), plus a shared **`mods/common`** source-only module that is the
+single source of truth for the loader-agnostic core:
 
 ```
 mods/common                      single-source core (compiled into every variant)
@@ -30,11 +30,28 @@ mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17  (reuses forge's int
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1       JDK 17
 mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1     JDK 21
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1       JDK 21
+mods/bukkit/zstdnet-bukkit       Bukkit/Spigot/Paper plugin (server-only)  JDK 17 bytecode, version-independent
 ```
+
+The **`mods/bukkit/zstdnet-bukkit`** plugin is server-side only (no mod loader). It reuses the same
+`mods/common` proxy core but, because a plugin loads *after* the MC port is bound, it cannot relocate
+the backend — it runs the proxy on a **separate listen port** (`auto_takeover=false`) and forwards to
+the local MC server. It compiles against Spigot-API (`compileOnly`) + slf4j (`compileOnly`, provided
+by Paper/Spigot at runtime), bundles `zstd-jni` via the `com.gradleup.shadow` fat-jar (no relocation —
+zstd-jni loads natives by package path), and targets Java 17 bytecode so one jar runs on both 1.20.1
+(JDK 17) and 1.21.x (JDK 21) servers. It **excludes** `server/DedicatedServerAutoPort.java` from its
+source set (that file is the only common file importing `net.minecraft.*`; the plugin never relocates
+ports). To make that exclusion possible, the MC-free pieces of auto-takeover were split out of
+`DedicatedServerAutoPort` into `server/AutoPortPlan` (record) + `server/DedicatedAutoPortState` (active-plan
+holder), which the core (`ServerProxyRuntime`) and the per-variant bootstraps now reference instead of the
+MC-coupled class. The plugin's own thin layer is `Zstdnet` (JavaPlugin entry), `platform/BukkitPlatform`,
+and `server/ServerProxyBootstrap` (same package as the core, so it can call the package-private
+`start/stop/...`); config defaults are written via `ServerProxyConfigFile.writePluginDefaults(...)`.
 
 All variants share the Java package `cn.tohsaka.factory.zstdnet`. **The loader-agnostic core
 lives once in `mods/common`** — `core/`, `proxy/LocalZstdNet`, `proxy/AndroidZstdNativeLoader`,
-`server/ServerProxyRuntime`, `server/ServerProxyConfigFile`, `server/DedicatedServerAutoPort`,
+`server/ServerProxyRuntime`, `server/ServerProxyConfigFile`, `server/DedicatedServerAutoPort`
+(+ its MC-free split `server/AutoPortPlan` / `server/DedicatedAutoPortState`),
 `ZstdServerList`, the `platform/` SPI, plus shared resources (lang files, Android `.so` natives)
 and the unit tests. Each variant's `build.gradle` pulls it in:
 
@@ -144,6 +161,7 @@ PowerShell build scripts at the repo root pick the right JDK and gradle invocati
 .\build-forge.ps1 -MinecraftVersion 1.19.2     # Forge 1.19.2 (JDK 17)
 .\build-neoforge.ps1                           # NeoForge 1.21.1 (JDK 21, default)
 .\build-neoforge.ps1 -MinecraftVersion 1.20.1  # NeoForge 1.20.1 (JDK 17)
+.\build-bukkit.ps1                             # Bukkit/Spigot/Paper plugin (JDK 17, version-independent)
 ```
 
 To build a single variant manually, set `JAVA_HOME`/`PATH` to the matching JDK and run, from
@@ -151,8 +169,9 @@ the variant's project dir:
 `& ..\..\..\..\zstdnet-build\tools\gradle-8.8\bin\gradle.bat --project-cache-dir <cache> build`
 
 On Forge/NeoForge, `jarJar` bundles `zstd-jni` into the final jar (a slim jar is built then
-deleted in favor of the all-in-one). The mod version is in each variant's `gradle.properties`
-(`mod_version`).
+deleted in favor of the all-in-one). The Bukkit plugin instead bundles `zstd-jni` with the
+`com.gradleup.shadow` fat-jar (`shadowJar`, classifier `''`; the thin `jar` is deleted). The mod
+version is in each variant's `gradle.properties` (`mod_version`).
 
 ## Tests & regression
 

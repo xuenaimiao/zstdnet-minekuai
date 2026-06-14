@@ -85,6 +85,13 @@ $targets = @(
         javaHome = 'C:\Program Files\Java\jdk-21'
         jarSyncSource = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\libs\zstdnet-1.21.1-fabric-1.3.6.jar'
         jarSyncTarget = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\libs\zstdnet-1.21.1-fabric-1.3.6-all.jar'
+    },
+    @{
+        # 插件端（版本无关，Java 17 字节码）。仅构建+单元测试；专用服/LAN 校验只针对 mod 变体，不覆盖插件。
+        name = 'bukkit'
+        projectDir = Join-Path $repoRoot 'mods\bukkit\zstdnet-bukkit'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-bukkit-regression'
+        javaHome = 'C:\Program Files\Java\jdk-17'
     }
 )
 

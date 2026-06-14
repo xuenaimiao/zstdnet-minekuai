@@ -204,6 +204,27 @@ public final class ServerProxyConfigFile {
         writeConfigWithComments(path, props, detectLineSeparator(path));
     }
 
+    /**
+     * 写入「插件端」默认配置。插件端（Bukkit/Spigot/Paper、混合端）无法像 mod 那样在绑定前挪后端端口，
+     * 所以必须 {@code auto_takeover=false}：MC 服务器照常占用 server-port 给原版玩家直连，
+     * zstd 代理独占另一个监听端口、把解压后的流量转发回本机后端端口。插件 onEnable 时在配置缺失才调用一次，
+     * 之后管理员可自行编辑此文件（带注释模板会保留）。
+     *
+     * @param listenPort  zstd 代理对外监听端口（需与后端端口不同）
+     * @param backendPort 本机 Minecraft 后端端口（通常即 server.properties 的 server-port）
+     */
+    public static void writePluginDefaults(int listenPort, int backendPort) throws IOException {
+        Path path = path();
+        Properties props = normalizeProperties(loadProperties());
+        Files.createDirectories(path.getParent());
+
+        props.setProperty("enabled", "true");
+        props.setProperty("auto_takeover", "false");
+        props.setProperty("listen", DEFAULT_LISTEN_HOST + ":" + listenPort);
+        props.setProperty("target", DEFAULT_TARGET_HOST + ":" + backendPort);
+        writeConfigWithComments(path, props, detectLineSeparator(path));
+    }
+
     private static Properties loadProperties() {
         Properties props = new Properties();
         Path path = path();

@@ -178,7 +178,7 @@ final class ServerProxyRuntime {
             }
 
             if (mode == RuntimeMode.DEDICATED && loaded.autoTakeover) {
-                DedicatedServerAutoPort.AutoPortPlan plan = DedicatedServerAutoPort.activePlan();
+                AutoPortPlan plan = DedicatedAutoPortState.activePlan();
                 if (plan == null) {
                     LOGGER.error("[zstdnet-server] auto_takeover=true but no dedicated auto-port plan was prepared. Restart the server and check coremod logs.");
                     return;
