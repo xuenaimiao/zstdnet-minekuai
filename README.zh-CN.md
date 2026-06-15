@@ -559,6 +559,19 @@ mc.example.com:35565
 
 - zstd-jni
 
+## 致谢与来源
+
+本项目是基于原作者 **wish** 的开源项目 [wish131400/zstdnet](https://github.com/wish131400/zstdnet)（MIT License）
+二次开发而来，由 **xuenai · 麦块联机（[minekuai.com](https://minekuai.com)）** 维护与扩展。
+原作者保留其著作权；本仓库新增 / 修改部分的著作权归本项目维护者所有。整体仍以 MIT License 发布。
+
+内置第三方组件：[zstd-jni](https://github.com/luben/zstd-jni)（Luben Karavelov，BSD 2-Clause），
+其中内含 [Zstandard](https://github.com/facebook/zstd)（Meta，BSD 2-Clause）。
+完整声明见随发行包一同分发、并打包进每个 jar 内的 `LICENSE` 与 `NOTICE`。
+
 ## License
 
-本项目采用 MIT License。
+本项目采用 **MIT License**。
+
+- Copyright (c) 2026 wish（原作者 — https://github.com/wish131400/zstdnet）
+- Copyright (c) 2026 xuenai · 麦块联机 / MineKuai（https://minekuai.com）— 二次开发与新增部分
