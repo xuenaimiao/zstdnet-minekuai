@@ -1,5 +1,7 @@
 # ZstdNet
 
+> 🚀 **第一次用 / 没装过 mod 或开过服？** 先看 **[新手使用指南（零基础）](docs/getting-started.zh-CN.md)** —— 大白话手把手教你装好、进服、开服。全部文档见 [`docs/`](docs/README.md)。
+
 ZstdNet 是一个 Minecraft Java 版模组，用 ZSTD 压缩客户端与服务端之间的转发流量，目标是在高重复数据场景下显著降低公网带宽占用。
 
 它尤其适合：

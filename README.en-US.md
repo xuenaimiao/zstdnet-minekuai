@@ -1,5 +1,7 @@
 # ZstdNet
 
+> 🚀 **First time / never installed a mod or run a server?** Start with the **[beginner-friendly Getting Started guide](docs/getting-started.en-US.md)** — plain language, step by step. All docs live in [`docs/`](docs/README.md).
+
 ZstdNet is a Minecraft Java Edition mod that uses ZSTD to compress relayed traffic between clients and servers, with the goal of significantly reducing public bandwidth usage in high-repetition data scenarios.
 
 It is especially suitable for:
