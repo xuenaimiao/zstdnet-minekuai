@@ -22,6 +22,7 @@ package cn.tohsaka.factory.zstdnet.platform;
 import org.bukkit.plugin.Plugin;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * 插件端的 {@link Platform} 实现。
@@ -41,6 +42,16 @@ public final class BukkitPlatform implements Platform {
     @Override
     public Path configDir() {
         return configDir;
+    }
+
+    /**
+     * 语音<b>插件</b>（Simple Voice Chat / Plasmo Voice 等）的配置在 {@code plugins/<VoiceMod>/}，
+     * 即本插件数据目录（{@code plugins/ZstdNet/}）的同级目录。故搜索根取 {@code plugins/} 目录。
+     */
+    @Override
+    public List<Path> voiceConfigRoots() {
+        Path plugins = configDir.getParent();
+        return plugins != null ? List.of(plugins) : List.of(configDir);
     }
 
     @Override

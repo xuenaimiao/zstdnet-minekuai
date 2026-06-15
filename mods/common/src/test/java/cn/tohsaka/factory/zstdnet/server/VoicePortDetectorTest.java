@@ -131,4 +131,27 @@ class VoicePortDetectorTest {
     void detectEmptyWhenNoVoiceModsPresent(@TempDir Path configDir) {
         assertTrue(VoicePortDetector.detect(configDir, 25566, "").isEmpty());
     }
+
+    // ---- bukkit/Spigot plugin layout: plugins/<VoiceMod>/ , Plasmo dir capitalized ----
+
+    @Test
+    void detectFindsBukkitPluginLayout(@TempDir Path pluginsRoot) throws Exception {
+        // SVC plugin: plugins/voicechat/voicechat-server.properties (子目录名与 mod 端一致)
+        Path svc = pluginsRoot.resolve("voicechat").resolve("voicechat-server.properties");
+        Files.createDirectories(svc.getParent());
+        Files.writeString(svc, "port=24454\n", StandardCharsets.UTF_8);
+
+        // Plasmo plugin: plugins/PlasmoVoice/config.toml (驼峰目录名，区别于 mod 端的 plasmovoice)
+        Path plasmo = pluginsRoot.resolve("PlasmoVoice").resolve("config.toml");
+        Files.createDirectories(plasmo.getParent());
+        Files.writeString(plasmo, "[host]\nport = 24455\n", StandardCharsets.UTF_8);
+
+        List<VoicePortDetector.VoicePort> ports = VoicePortDetector.detect(List.of(pluginsRoot), 25566, "");
+
+        assertEquals(2, ports.size());
+        assertEquals(24454, ports.get(0).port());
+        assertEquals("simple_voice_chat", ports.get(0).label());
+        assertEquals(24455, ports.get(1).port());
+        assertEquals("plasmo_voice", ports.get(1).label());
+    }
 }

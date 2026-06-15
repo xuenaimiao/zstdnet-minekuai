@@ -67,6 +67,7 @@ public final class VoicePortDetector {
 
     /**
      * 扫描后端常见语音 mod，产出需要单独处理的语音端口（有序去重，下标即 channelId）。
+     * 单根目录便捷重载（mod 加载器用 {@code config/}）。
      *
      * @param configDir       Minecraft 的 {@code config/} 目录
      * @param backendGamePort 后端游戏端口（auto_takeover 后是被挪走的真实端口）；
@@ -75,14 +76,27 @@ public final class VoicePortDetector {
      * @return 有序去重的语音端口列表；探测不到时返回空列表（不会为 null）
      */
     public static List<VoicePort> detect(Path configDir, int backendGamePort, String extraUdpPortsCsv) {
+        return detect(List.of(configDir), backendGamePort, extraUdpPortsCsv);
+    }
+
+    /**
+     * 多根目录版本：插件端语音<b>插件</b>配置在 {@code plugins/<VoiceMod>/}，与 mod 加载器的
+     * {@code config/<voicemod>/} 布局不同，故按平台给定的若干搜索根目录依次探测（首个命中即用）。
+     *
+     * @param roots           搜索根目录列表（每个根下再找 {@code voicechat/} / {@code plasmovoice/} 等子目录）
+     * @param backendGamePort 后端游戏端口；等于该端口的语音端口属「同端口」，已由 game 直通覆盖，跳过
+     * @param extraUdpPortsCsv {@code extra_udp_ports} 原始值（逗号分隔，可空）——任意 UDP mod 的通用兜底
+     * @return 有序去重的语音端口列表；探测不到时返回空列表（不会为 null）
+     */
+    public static List<VoicePort> detect(List<Path> roots, int backendGamePort, String extraUdpPortsCsv) {
         List<VoicePort> raw = new ArrayList<>();
 
-        Integer svc = detectSimpleVoiceChat(configDir);
+        Integer svc = detectSimpleVoiceChat(roots);
         if (svc != null) {
             raw.add(new VoicePort("simple_voice_chat", svc));
         }
 
-        Integer plasmo = detectPlasmoVoice(configDir, backendGamePort);
+        Integer plasmo = detectPlasmoVoice(roots, backendGamePort);
         if (plasmo != null) {
             raw.add(new VoicePort("plasmo_voice", plasmo));
         }
@@ -106,21 +120,27 @@ public final class VoicePortDetector {
     }
 
     // ---------------------------------------------------------------------
-    // Simple Voice Chat: config/voicechat/voicechat-server.properties
+    // Simple Voice Chat:
+    //   mod    : config/voicechat/voicechat-server.properties
+    //   plugin : plugins/voicechat/voicechat-server.properties
+    // 子目录名两端一致（voicechat），只是搜索根不同。
     // ---------------------------------------------------------------------
 
-    private static Integer detectSimpleVoiceChat(Path configDir) {
-        Path path = configDir.resolve("voicechat").resolve("voicechat-server.properties");
-        if (!Files.exists(path)) {
-            return null;
+    private static Integer detectSimpleVoiceChat(List<Path> roots) {
+        for (Path root : roots) {
+            Path path = root.resolve("voicechat").resolve("voicechat-server.properties");
+            if (!Files.exists(path)) {
+                continue;
+            }
+            try {
+                String text = Files.readString(path, StandardCharsets.UTF_8);
+                return parseSimpleVoiceChatPort(text, path.toString());
+            } catch (IOException e) {
+                LOGGER.warn("[zstdnet-server] failed reading Simple Voice Chat config {}: {}", path, e.toString());
+                return null;
+            }
         }
-        try {
-            String text = Files.readString(path, StandardCharsets.UTF_8);
-            return parseSimpleVoiceChatPort(text, path.toString());
-        } catch (IOException e) {
-            LOGGER.warn("[zstdnet-server] failed reading Simple Voice Chat config {}: {}", path, e.toString());
-            return null;
-        }
+        return null;
     }
 
     /**
@@ -169,18 +189,26 @@ public final class VoicePortDetector {
     //                     port = 0            (>0 时覆盖 [host].port 对客户端公布的端口)
     // ---------------------------------------------------------------------
 
-    private static Integer detectPlasmoVoice(Path configDir, int backendGamePort) {
-        Path path = configDir.resolve("plasmovoice").resolve("config.toml");
-        if (!Files.exists(path)) {
-            return null;
+    // mod 端子目录为 plasmovoice（小写），插件端为 PlasmoVoice（驼峰）；Linux 区分大小写，故两种都试。
+    private static final String[] PLASMO_DIR_NAMES = {"plasmovoice", "PlasmoVoice"};
+
+    private static Integer detectPlasmoVoice(List<Path> roots, int backendGamePort) {
+        for (Path root : roots) {
+            for (String dir : PLASMO_DIR_NAMES) {
+                Path path = root.resolve(dir).resolve("config.toml");
+                if (!Files.exists(path)) {
+                    continue;
+                }
+                try {
+                    String text = Files.readString(path, StandardCharsets.UTF_8);
+                    return parsePlasmoVoicePort(text, backendGamePort, path.toString());
+                } catch (IOException e) {
+                    LOGGER.warn("[zstdnet-server] failed reading Plasmo Voice config {}: {}", path, e.toString());
+                    return null;
+                }
+            }
         }
-        try {
-            String text = Files.readString(path, StandardCharsets.UTF_8);
-            return parsePlasmoVoicePort(text, backendGamePort, path.toString());
-        } catch (IOException e) {
-            LOGGER.warn("[zstdnet-server] failed reading Plasmo Voice config {}: {}", path, e.toString());
-            return null;
-        }
+        return null;
     }
 
     /**

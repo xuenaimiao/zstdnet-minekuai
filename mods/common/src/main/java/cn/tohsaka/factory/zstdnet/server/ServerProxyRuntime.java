@@ -2612,7 +2612,7 @@ final class ServerProxyRuntime {
         }
         String transport = normalizeVoiceTransport(config.voiceTransport);
         List<VoicePortDetector.VoicePort> detected =
-            VoicePortDetector.detect(Platforms.get().configDir(), config.target.port(), config.extraUdpPorts);
+            VoicePortDetector.detect(Platforms.get().voiceConfigRoots(), config.target.port(), config.extraUdpPorts);
         List<Integer> ports = detected.stream().map(VoicePortDetector.VoicePort::port).toList();
         if (!ports.isEmpty()) {
             LOGGER.info("[zstdnet-server] voice ports detected (transport={}): {}", transport, ports);
