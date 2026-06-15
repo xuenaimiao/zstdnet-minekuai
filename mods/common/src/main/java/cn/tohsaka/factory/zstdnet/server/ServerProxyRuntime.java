@@ -2574,7 +2574,7 @@ final class ServerProxyRuntime {
             ? plan.ports().stream().map(p -> new HostPort("127.0.0.1", p)).toList()
             : List.of();
 
-        List<UdpRoute> routes = buildUdpRoutes(config);
+        List<UdpRoute> routes = buildUdpRoutes(config, plan);
         List<UdpForwarder> started = new ArrayList<>();
         for (UdpRoute route : routes) {
             List<HostPort> voiceChannels = "game".equals(route.label()) ? tunnelTargets : List.of();
@@ -2630,7 +2630,7 @@ final class ServerProxyRuntime {
         return voicePortPlan;
     }
 
-    private List<UdpRoute> buildUdpRoutes(ProxyConfig config) {
+    private List<UdpRoute> buildUdpRoutes(ProxyConfig config, VoicePortPlan plan) {
         List<UdpRoute> routes = new ArrayList<>();
         routes.add(new UdpRoute("game", config.listen, config.target));
 
@@ -2645,7 +2645,20 @@ final class ServerProxyRuntime {
         }
 
         if (config.voiceChatPassthrough) {
-            LOGGER.warn("[zstdnet-server] voice chat UDP passthrough not armed: {}", voiceChat.reason());
+            // 新的隧道/桥接计划（见 computeVoicePortPlan）已接管探测到的独立语音端口时，旧的单端口
+            // passthrough 在独立端口场景下本就返回"未武装"——此时它只是被取代而非故障，降为 INFO，
+            // 避免与上面 "voice ports detected / UDP route armed (+voice tunnel...)" 的 INFO 自相矛盾、
+            // 误导服主去填已被取代的 voice_chat_listen。仅当新计划也没覆盖语音时才保留 WARN。
+            if (plan != null && !plan.ports().isEmpty()) {
+                LOGGER.info(
+                    "[zstdnet-server] voice handled by the {} plan {}; legacy single-port passthrough not used ({}).",
+                    plan.transport(),
+                    plan.ports(),
+                    voiceChat.reason()
+                );
+            } else {
+                LOGGER.warn("[zstdnet-server] voice chat UDP passthrough not armed: {}", voiceChat.reason());
+            }
         } else {
             LOGGER.info("[zstdnet-server] voice chat UDP passthrough disabled.");
         }

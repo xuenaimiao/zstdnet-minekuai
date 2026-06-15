@@ -93,11 +93,14 @@ public final class VoicePortSync implements Listener {
             + "); ZstdNet mod clients will auto-arm detected voice ports.");
     }
 
-    /** 玩家进服后，把当前语音端口计划下发给客户端（无独立语音端口时不发）。 */
+    /**
+     * 玩家进服后，把当前语音端口计划下发给客户端。空列表也下发（让客户端撤销旧监听），
+     * 与各 mod 变体 {@code VoicePortSync.send} 行为一致；仅 {@code plan == null} 时跳过。
+     */
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         VoicePortPlan plan = ServerProxyBootstrap.currentVoicePortPlan();
-        if (plan == null || plan.ports().isEmpty()) {
+        if (plan == null) {
             return;
         }
         try {
