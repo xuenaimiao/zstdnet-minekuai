@@ -1,0 +1,110 @@
+/*
+ * Copyright (c) 2026 wish
+ *
+ * This file is part of ZstdNet.
+ *
+ * ZstdNet is free software: you can redistribute it and/or modify
+ * it under the terms of the MIT License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ZstdNet is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MIT License for more details.
+ *
+ * You should have received a copy of the MIT License
+ * along with ZstdNet. If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+package cn.tohsaka.factory.zstdnet;
+
+import cn.tohsaka.factory.zstdnet.core.compress.ClientCompressionConfig;
+import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
+import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
+import com.mojang.logging.LogUtils;
+import net.fabricmc.loader.api.FabricLoader;
+import org.slf4j.Logger;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+
+/**
+ * Client-side config used by the local publisher.
+ * <p>
+ * 解析逻辑统一委托到共享的 {@link ClientCompressionConfig}，本类只负责定位 config 目录与读写文件。
+ */
+public final class ClientConfig {
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("zstdnet-client.toml");
+
+    private static volatile int level = ClientCompressionConfig.DEFAULT_LEVEL;
+    private static volatile CompressionOptions compression = CompressionOptions.none();
+    private static volatile TransformOptions transform = TransformOptions.disabled();
+    private static volatile boolean initialized;
+
+    private ClientConfig() {
+    }
+
+    public static void init() {
+        if (initialized) {
+            return;
+        }
+        synchronized (ClientConfig.class) {
+            if (initialized) {
+                return;
+            }
+            ClientCompressionConfig.Parsed parsed = loadOrCreate();
+            level = parsed.level();
+            compression = parsed.compression();
+            transform = parsed.transform();
+            initialized = true;
+        }
+    }
+
+    public static int getLevel() {
+        if (!initialized) {
+            init();
+        }
+        return level;
+    }
+
+    public static CompressionOptions compression() {
+        if (!initialized) {
+            init();
+        }
+        return compression;
+    }
+
+    public static TransformOptions transform() {
+        if (!initialized) {
+            init();
+        }
+        return transform;
+    }
+
+    private static ClientCompressionConfig.Parsed loadOrCreate() {
+        ClientCompressionConfig.Parsed fallback = new ClientCompressionConfig.Parsed(ClientCompressionConfig.DEFAULT_LEVEL, CompressionOptions.none(), TransformOptions.disabled());
+        try {
+            Files.createDirectories(PATH.getParent());
+            if (!Files.exists(PATH)) {
+                Files.writeString(PATH, ClientCompressionConfig.defaultConfigBody(), StandardCharsets.UTF_8);
+                return fallback;
+            }
+        } catch (IOException ignored) {
+            return fallback;
+        }
+
+        Properties properties = new Properties();
+        try (InputStream input = Files.newInputStream(PATH)) {
+            properties.load(input);
+        } catch (IOException ignored) {
+            return fallback;
+        }
+        return ClientCompressionConfig.parse(properties, PATH.getParent(), LOGGER);
+    }
+}

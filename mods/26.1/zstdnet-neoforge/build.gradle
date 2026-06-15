@@ -1,0 +1,121 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.141'
+}
+
+version = mod_version
+group = mod_group_id
+
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译
+sourceSets {
+    main {
+        java.srcDir '../../common/src/main/java'
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
+def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile
+def externalProjectBuildDir = new File(externalBuildRoot, "mods/${minecraft_version}/zstdnet-neoforge").canonicalFile
+
+layout.buildDirectory.set(externalProjectBuildDir)
+
+base {
+    archivesName = "zstdnet-${minecraft_version}-neoforge"
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+neoForge {
+    version = neo_version
+
+    runs {
+        configureEach {
+            gameDirectory = new File(externalProjectBuildDir, 'run')
+            systemProperty 'forge.logging.console.level', 'debug'
+        }
+
+        client {
+            client()
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+    all { repository ->
+        if (repository instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository && repository.url.toString().contains('maven.neoforged.net')) {
+            repository.content {
+                includeGroupByRegex 'net\\..*'
+                includeGroupByRegex 'cpw\\..*'
+            }
+        }
+    }
+}
+
+dependencies {
+    jarJar(implementation('com.github.luben:zstd-jni:1.5.7-7')) {
+        version {
+            strictly '[1.5.7-7]'
+            prefer '1.5.7-7'
+        }
+    }
+    // 26.1 (unobfuscated) moddev 不再提供 additionalRuntimeClasspath；
+    // zstd-jni 已通过上面的 jarJar(implementation(...)) 进入实现 + 运行时类路径。
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    // Gradle 9 不再自动把启动器加入测试运行时类路径，需显式声明，否则 :test 报 "Failed to load JUnit Platform"。
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly 'org.slf4j:slf4j-api:2.0.9'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}
+
+processResources {
+    def replaceProperties = [
+        mod_id      : mod_id,
+        mod_name    : mod_name,
+        mod_version : mod_version,
+        neo_version : neo_version
+    ]
+    inputs.properties(replaceProperties)
+
+    filesMatching(['META-INF/neoforge.mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties
+    }
+}
+
+jar {
+    manifest {
+        attributes([
+            'Specification-Title'    : mod_id,
+            'Specification-Vendor'   : 'tohsaka',
+            'Specification-Version'  : '1',
+            'Implementation-Title'   : project.name,
+            'Implementation-Version' : archiveVersion,
+            'Implementation-Vendor'  : 'tohsaka',
+            'Automatic-Module-Name'  : "${mod_group_id}.${mod_id}"
+        ])
+    }
+}

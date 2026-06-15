@@ -278,3 +278,54 @@ If you want one-command builds, mirror the new variant in:
 `coremod/*Hooks`, `platform/<Loader>Platform`, (Fabric) `client/ZstdnetClient` + `mixin/*`, the
 mod metadata + mixins.json/coremods.json + JS coremods, `build.gradle` / `settings.gradle` /
 `gradle.properties`.
+
+---
+
+## 10. Minecraft 26.1+ (the un-obfuscated era) — what's different
+
+26.1 (the first 2026 "year.drop.hotfix" drop, successor to 1.21.x) is **Minecraft's first
+un-obfuscated release** and needs a different toolchain. The `mods/26.1/*` variants are the
+reference. One 26.1 variant covers the whole `26.1.x` line (26.1.1 / 26.1.2).
+
+**Toolchain (new):**
+- **JDK 25** required (was 17/21). On this machine: `C:\Users\78569\.jdks\liberica-25.0.3`.
+- **Gradle 9.x** required (NeoForge ≥9.1, Fabric Loom 1.16 → 9.4.1). A `gradle-9.4.1` dist lives at
+  `../zstdnet-build/tools/gradle-9.4.1`. `build-neoforge.ps1` / `build-fabric.ps1` pick gradle+JDK
+  per `-MinecraftVersion`; `scripts/run-regression.ps1` sets a per-target `gradleBat`.
+- **Gradle 9 quirk:** add `testRuntimeOnly 'org.junit.platform:junit-platform-launcher'` or `:test`
+  fails with "Failed to load JUnit Platform" (Gradle 9 no longer adds the launcher automatically).
+
+**Pinned versions (26.1.2):** `neo_version=26.1.2.76`, ModDevGradle `2.0.141`; Fabric
+`loader_version=0.19.3`, `fabric_api_version=0.151.0+26.1.2`, `loom_version=1.16.3`; zstd-jni `1.5.7-7`.
+
+**NeoForge build.gradle:** toolchain 25; `neoforge.mods.toml` → `javaVersion="[25,)"`, minecraft
+`versionRange="[26.1,26.2)"`. ModDevGradle **removed `additionalRuntimeClasspath`** — rely on
+`jarJar(implementation(...))` for zstd-jni.
+
+**Fabric build.gradle (un-obfuscated Loom):** apply via `plugins { id 'net.fabricmc.fabric-loom'
+version "${loom_version}" }` (resolved from the fabric maven in `settings.gradle` pluginManagement).
+**No `mappings` line** (names are official already); use `implementation` (not `modImplementation`);
+no `remapJar`. `zstdnet.mixins.json` → `compatibilityLevel "JAVA_25"`; `fabric.mod.json` →
+`"java": ">=25"`, `"minecraft": ">=26.1 <26.2"`.
+
+**Vanilla API rename cheat-sheet (1.21.1 → 26.1)** — affects the per-variant layer only
+(`mods/common` is API-light and unchanged). Always confirm with `javap` against the real jar
+(`.../caches/fabric-loom/minecraftMaven/.../minecraft-merged-deobf-26.1.2.jar`):
+- `net.minecraft.resources.ResourceLocation` → `…resources.Identifier` (`fromNamespaceAndPath` same)
+- `GuiGraphics` → `GuiGraphicsExtractor`; `drawString`→`text`, `drawCenteredString`→`centeredText`;
+  `blit` now needs a `RenderPipeline`; `Screen.render(...)` → `extractRenderState(GuiGraphicsExtractor,…)`
+- `ClickEvent`/`HoverEvent` are interfaces → `new ClickEvent.CopyToClipboard(String)`,
+  `new HoverEvent.ShowText(Component)`, etc.
+- `Player.hasPermissions(int)` → `permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER)` (lvl 2)
+- `Button.onPress()` → `onPress(InputWithModifiers)` (synthesize `new KeyEvent(KEY_RETURN,0,0)`)
+- screen input: `keyPressed(int,int,int)`→`keyPressed(KeyEvent)`, `mouseClicked(double,double,int)`→
+  `mouseClicked(MouseButtonEvent, boolean)`; `CommonInputs` removed (use `InputWithModifiers.isSelection()`)
+- `NetworkServerEntry.getServerData()` removed → protected `serverData` field (Fabric `@Accessor`
+  mixin; NeoForge reflection)
+- `GameProfile.getName()` → `name()` (authlib bumped to a record)
+
+**Fabric API moves (26.1):** `ClientCommandManager` → `ClientCommands` (static `literal`/`argument`);
+`HudRenderCallback` **removed** → `HudElementRegistry.addLast(Identifier, (gui, deltaTracker) -> …)`;
+`PayloadTypeRegistry.playS2C()/playC2S()` → `clientboundPlay()/serverboundPlay()`.
+
+**NeoForge networking (26.1):** `PacketDistributor.sendToServer(...)` (in-handler) → `context.reply(...)`.

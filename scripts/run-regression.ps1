@@ -37,6 +37,7 @@ function Invoke-GradleBuild {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildRoot = Join-Path (Split-Path -Parent $repoRoot) 'zstdnet-build'
+# 默认 Gradle 8.8；26.1 变体需 Gradle 9.x（见各 target 的 gradleBat 覆盖）。
 $gradleBat = Join-Path $buildRoot 'tools\gradle-8.8\bin\gradle.bat'
 $gradleUserHome = Join-Path $buildRoot 'cache\gradle-user'
 
@@ -87,6 +88,20 @@ $targets = @(
         jarSyncTarget = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\libs\zstdnet-1.21.1-fabric-1.3.6-all.jar'
     },
     @{
+        name = 'neoforge-26.1'
+        projectDir = Join-Path $repoRoot 'mods\26.1\zstdnet-neoforge'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-26.1-regression'
+        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
+    },
+    @{
+        name = 'fabric-26.1'
+        projectDir = Join-Path $repoRoot 'mods\26.1\zstdnet-fabric'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-26.1-regression'
+        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
+    },
+    @{
         # 插件端（版本无关，Java 17 字节码）。仅构建+单元测试；专用服/LAN 校验只针对 mod 变体，不覆盖插件。
         name = 'bukkit'
         projectDir = Join-Path $repoRoot 'mods\bukkit\zstdnet-bukkit'
@@ -101,7 +116,8 @@ $originalPath = $env:Path
 try {
     if (-not $SkipBuild) {
         foreach ($target in $targets) {
-            Invoke-GradleBuild -Target $target -GradleBat $gradleBat -OriginalPath $originalPath
+            $targetGradle = if ($target.ContainsKey('gradleBat')) { $target.gradleBat } else { $gradleBat }
+            Invoke-GradleBuild -Target $target -GradleBat $targetGradle -OriginalPath $originalPath
         }
     }
 

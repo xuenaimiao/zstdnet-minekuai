@@ -40,7 +40,8 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
 It is recommended to install this mod on both the client and the server.
 
 - Current versions supported in this repository:
-  Forge 1.19.2, Forge 1.20.1, NeoForge 1.20.1, NeoForge 1.21.1, Fabric 1.20.1, Fabric 1.21.1
+  Forge 1.19.2, Forge 1.20.1, NeoForge 1.20.1, NeoForge 1.21.1, Fabric 1.20.1, Fabric 1.21.1, NeoForge 26.1, Fabric 26.1
+  (the 26.1 builds cover the whole 26.1.x line, i.e. 26.1.1 / 26.1.2; they require Java 25)
 - **Plugin servers (no mod loader)**: Bukkit / Spigot / Paper / Purpur, plus hybrid servers like Arclight / Mohist — see "[Plugin & Hybrid Servers](#plugin--hybrid-servers-bukkit--spigot--paper--arclight--mohist)" below
 - When connecting to a remote ZstdNet-enabled server: the client needs it
 - When using the built-in Zstd server entry: the server needs it

@@ -17,8 +17,8 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is seven parallel, independent projects
-(six mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
+This is **not a single Gradle project**. It is nine parallel, independent projects
+(eight mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
 — there is no root settings.gradle), plus a shared **`mods/common`** source-only module that is the
 single source of truth for the loader-agnostic core:
 
@@ -30,8 +30,14 @@ mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17  (reuses forge's int
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1       JDK 17
 mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1     JDK 21
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1       JDK 21
+mods/26.1/zstdnet-neoforge       NeoForge 26.1       JDK 25  (un-obfuscated; covers 26.1.x = 26.1.1/26.1.2)
+mods/26.1/zstdnet-fabric         Fabric 26.1         JDK 25  (un-obfuscated Loom; covers 26.1.x)
 mods/bukkit/zstdnet-bukkit       Bukkit/Spigot/Paper plugin (server-only)  JDK 17 bytecode, version-independent
 ```
+
+> **MC 26.1+ (the un-obfuscated era)** needs a different toolchain (JDK 25, Gradle 9.x, new Fabric
+> Loom, many vanilla API renames). See `ADDING_A_VARIANT.md` §10 for the full 26.1 reference. The
+> Bukkit plugin is version-independent and runs on 26.1.x servers unchanged (no rebuild needed).
 
 The **`mods/bukkit/zstdnet-bukkit`** plugin is server-side only (no mod loader). It reuses the same
 `mods/common` proxy core but, because a plugin loads *after* the MC port is bound, it cannot relocate
@@ -149,10 +155,11 @@ Runtime config files live in Minecraft's `config/`: `zstdnet-client.toml` (clien
 ## Build
 
 Builds use an **external build root** at `../zstdnet-build` (a sibling of this repo, gitignored).
-It must contain a Gradle 8.8 distribution at `tools/gradle-8.8` and holds all caches and output
-jars — `build.gradle` redirects `layout.buildDirectory` there, so there is no in-repo `build/`.
-Builds use this external `gradle.bat` directly (not the in-repo wrapper). Required JDKs:
-`C:\Program Files\Java\jdk-17` and `C:\Program Files\Java\jdk-21`.
+It must contain a Gradle 8.8 distribution at `tools/gradle-8.8` (and, for MC 26.1+, a Gradle 9.x
+distribution at `tools/gradle-9.4.1`) and holds all caches and output jars — `build.gradle` redirects
+`layout.buildDirectory` there, so there is no in-repo `build/`. Builds use the external `gradle.bat`
+directly (not the in-repo wrapper). Required JDKs: `C:\Program Files\Java\jdk-17`,
+`C:\Program Files\Java\jdk-21`, and (for 26.1) JDK 25 (`C:\Users\78569\.jdks\liberica-25.0.3`).
 
 PowerShell build scripts at the repo root pick the right JDK and gradle invocation:
 
@@ -161,6 +168,8 @@ PowerShell build scripts at the repo root pick the right JDK and gradle invocati
 .\build-forge.ps1 -MinecraftVersion 1.19.2     # Forge 1.19.2 (JDK 17)
 .\build-neoforge.ps1                           # NeoForge 1.21.1 (JDK 21, default)
 .\build-neoforge.ps1 -MinecraftVersion 1.20.1  # NeoForge 1.20.1 (JDK 17)
+.\build-neoforge.ps1 -MinecraftVersion 26.1    # NeoForge 26.1 (JDK 25, Gradle 9.4.1)
+.\build-fabric.ps1   -MinecraftVersion 26.1    # Fabric 26.1 (JDK 25, Gradle 9.4.1); also supports 1.20.1/1.21.1
 .\build-bukkit.ps1                             # Bukkit/Spigot/Paper plugin (JDK 17, version-independent)
 ```
 

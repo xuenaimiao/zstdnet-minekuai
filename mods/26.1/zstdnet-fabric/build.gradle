@@ -1,0 +1,92 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+}
+
+version = mod_version
+group = mod_group_id
+
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译
+sourceSets {
+    main {
+        java.srcDir '../../common/src/main/java'
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
+def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile
+def externalProjectBuildDir = new File(externalBuildRoot, "mods/${minecraft_version}/zstdnet-fabric").canonicalFile
+
+layout.buildDirectory.set(externalProjectBuildDir)
+
+base {
+    archivesName = "zstdnet-${minecraft_version}-fabric"
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+}
+
+repositories {
+    maven {
+        url = 'https://maven.fabricmc.net/'
+    }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    // 26.1 起 Minecraft 不再混淆：新版 Loom 不需要（也不接受）mappings，直接使用官方名称。
+    implementation "net.fabricmc:fabric-loader:${loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    implementation 'com.github.luben:zstd-jni:1.5.7-7'
+    include 'com.github.luben:zstd-jni:1.5.7-7'
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    // Gradle 9 不再自动提供 JUnit Platform launcher，需显式加入测试运行时类路径。
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+loom {
+    runs {
+        client {
+            client()
+            runDir = "../../../../zstdnet-build/mods/${minecraft_version}/zstdnet-fabric/run"
+        }
+        server {
+            server()
+            runDir = "../../../../zstdnet-build/mods/${minecraft_version}/zstdnet-fabric/run"
+            programArgs '--nogui'
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+test {
+    useJUnitPlatform()
+}
+
+processResources {
+    def replaceProperties = [
+        mod_id           : mod_id,
+        mod_name         : mod_name,
+        mod_version      : mod_version,
+        minecraft_version: minecraft_version,
+        loader_version   : loader_version
+    ]
+    inputs.properties(replaceProperties)
+
+    filesMatching(['fabric.mod.json', 'pack.mcmeta']) {
+        expand replaceProperties
+    }
+}

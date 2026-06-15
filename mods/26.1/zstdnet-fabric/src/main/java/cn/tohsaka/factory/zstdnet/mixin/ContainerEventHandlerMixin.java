@@ -1,0 +1,54 @@
+/*
+ * Copyright (c) 2026 wish
+ *
+ * This file is part of ZstdNet.
+ *
+ * ZstdNet is free software: you can redistribute it and/or modify
+ * it under the terms of the MIT License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ZstdNet is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MIT License for more details.
+ *
+ * You should have received a copy of the MIT License
+ * along with ZstdNet. If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+package cn.tohsaka.factory.zstdnet.mixin;
+
+import cn.tohsaka.factory.zstdnet.client.ClientProxyPublisher;
+import net.minecraft.client.gui.components.events.ContainerEventHandler;
+import net.minecraft.client.gui.screens.DirectJoinServerScreen;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.ShareToLanScreen;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
+import net.minecraft.client.input.MouseButtonEvent;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+@Mixin(ContainerEventHandler.class)
+interface ContainerEventHandlerMixin {
+    // 26.1 起 mouseClicked(DDI)Z 改为 mouseClicked(MouseButtonEvent, boolean)。坐标/按键从事件对象读取。
+    @Inject(method = "mouseClicked(Lnet/minecraft/client/input/MouseButtonEvent;Z)Z", at = @At("HEAD"), cancellable = true)
+    private void zstdnet$onMouseClicked(MouseButtonEvent event, boolean doubleClick, CallbackInfoReturnable<Boolean> cir) {
+        if (!((Object) this instanceof Screen screen)) {
+            return;
+        }
+
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
+        boolean handled =
+            (screen instanceof JoinMultiplayerScreen joinScreen && ClientProxyPublisher.onJoinMultiplayerMouseClicked(joinScreen, mouseX, mouseY, button))
+                || (screen instanceof DirectJoinServerScreen directJoinScreen && ClientProxyPublisher.onDirectJoinMouseClicked(directJoinScreen, mouseX, mouseY, button))
+                || (screen instanceof ShareToLanScreen shareToLanScreen && ClientProxyPublisher.onShareToLanMouseClicked(shareToLanScreen, mouseX, mouseY, button));
+        if (handled) {
+            cir.setReturnValue(true);
+        }
+    }
+}
