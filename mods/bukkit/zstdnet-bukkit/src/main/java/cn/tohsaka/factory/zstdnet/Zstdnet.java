@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet;
 
+import cn.tohsaka.factory.zstdnet.network.VoicePortSync;
 import cn.tohsaka.factory.zstdnet.platform.BukkitPlatform;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
@@ -40,6 +41,8 @@ public final class Zstdnet extends JavaPlugin {
         // 必须第一行：注入插件平台实现，让 common 核心从插件数据目录读写配置。
         Platforms.set(new BukkitPlatform(this));
         ServerProxyBootstrap.initBukkit(this);
+        // 进服时把探测到的语音端口下发给 ZstdNet 客户端 mod（零配置兼容各类语音 mod）。
+        VoicePortSync.init(this);
     }
 
     @Override

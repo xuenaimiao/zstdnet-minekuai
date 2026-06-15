@@ -73,6 +73,14 @@ public final class ServerProxyBootstrap {
     }
 
     /**
+     * 当前生效的语音端口计划（供插件端 {@code network.VoicePortSync} 下发给 ZstdNet 客户端 mod）。
+     * 代理未启动时返回空计划。
+     */
+    public static VoicePortPlan currentVoicePortPlan() {
+        return RUNTIME.currentVoicePortPlan();
+    }
+
+    /**
      * 插件 onDisable 时调用：停止轮询并关闭代理。
      */
     public static void shutdown() {

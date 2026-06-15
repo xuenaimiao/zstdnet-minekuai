@@ -44,6 +44,10 @@ import java.util.List;
  */
 public final class VoicePortSync {
     private static final ResourceLocation VOICE_PORT_SYNC_ID = new ResourceLocation(Zstdnet.MODID, "voice_port_sync");
+    // 前导「帧标记」字节，固定 0x00，使本变体的线格式与 Forge/NeoForge SimpleChannel 完全一致
+    // （Forge 在 payload 头自动写入消息序号，本通道只有一条消息故序号恒为 0）。这样插件端（Bukkit/Spigot/Paper）
+    // 在 1.20.1 服务器上只需发一份字节数组即可同时被 Forge、NeoForge、Fabric 客户端解码。详见 bukkit 变体 VoicePortSync。
+    private static final byte FRAME_TAG = 0;
     private static final byte WIRE_VERSION = 1;
     private static final int MAX_PORTS = 256;
 
@@ -58,6 +62,7 @@ public final class VoicePortSync {
         }
         clientInitialized = true;
         ClientPlayNetworking.registerGlobalReceiver(VOICE_PORT_SYNC_ID, (client, handler, buf, responseSender) -> {
+            buf.readByte(); // frame tag (0x00, 与 Forge 消息序号对齐)
             buf.readByte(); // wire version (reserved)
             String transport = buf.readUtf(32);
             int count = Math.min(buf.readVarInt(), MAX_PORTS);
@@ -78,6 +83,7 @@ public final class VoicePortSync {
         List<Integer> ports = plan.ports();
         int count = Math.min(ports.size(), MAX_PORTS);
         FriendlyByteBuf out = PacketByteBufs.create();
+        out.writeByte(FRAME_TAG);
         out.writeByte(WIRE_VERSION);
         out.writeUtf(plan.transport(), 32);
         out.writeVarInt(count);
