@@ -162,6 +162,8 @@ players with ZstdNet      ──► plugin proxy 25566 ──(decompress)──�
 /zstdnet stop     stop the proxy
 ```
 
+**Voice mods are zero-config too**: the plugin auto-supports Simple Voice Chat / Plasmo Voice. It scans `plugins/voicechat/` and `plugins/PlasmoVoice/` for the voice mod's independent UDP port and, when a player joins, pushes that port to the ZstdNet client mod (over a Bukkit plugin message — harmless to vanilla players), which then opens a matching local listener automatically. The default `tunnel` mode carries voice over the single `listen` entry port (no separate voice port to open); set `voice_transport=bridge` in the config to switch. Use `extra_udp_ports` to add anything detection misses. Full details and caveats are in "[What about Simple Voice Chat, Plasmo Voice or other UDP-based voice mods](#what-about-simple-voice-chat-plasmo-voice-or-other-udp-based-voice-mods)" below.
+
 **Hybrid servers**: Arclight / Mohist / CatServer run Forge/NeoForge underneath and accept **both mods and plugins**:
 
 - Simplest: use this plugin (drop into `plugins/`) — it does not rely on the hybrid's coremod / auto-takeover compatibility.
@@ -330,7 +332,7 @@ UI-heavy menu rewrites can still cause compatibility issues.
 
 ### What about Simple Voice Chat, Plasmo Voice or other UDP-based voice mods?
 
-Yes — and it's **zero-config**. Voice audio is not compressed; it's forwarded as raw UDP. ZstdNet auto-detects the independent UDP port that common voice mods (Simple Voice Chat, Plasmo Voice) listen on, takes those ports over, and once a player joins it automatically opens matching listeners on the client's machine — you don't have to fill in any port.
+Yes — and it's **zero-config** (**on both mod servers and the plugin**). Voice audio is not compressed; it's forwarded as raw UDP. ZstdNet auto-detects the independent UDP port that common voice mods (Simple Voice Chat, Plasmo Voice) listen on, takes those ports over, and once a player joins it automatically opens matching listeners on the client's machine — you don't have to fill in any port. (The plugin build scans `plugins/voicechat/` and `plugins/PlasmoVoice/`, and pushes the ports to the client mod over a Bukkit plugin message.)
 
 There are two voice transport modes, controlled by the server-side `voice_transport` setting:
 
@@ -344,6 +346,8 @@ Notes:
 - **Other UDP mods**: for anything auto-detection misses, list the ports manually via `extra_udp_ports`.
 - If the voice route fails to arm, the game TCP path still works; only voice goes offline.
 - The legacy `voice_chat_listen` / `voice_chat_target` keys are kept for compatibility; `/zstdport voice <port>` and `/zstdport zstdvoice <port>` still work for manual tweaks.
+
+> 📖 For a **step-by-step, no-prior-knowledge** walkthrough (how players join and talk / how owners open ports / tunnel vs bridge / a per-mod overview), see the **[Voice Mod Guide (beginner-friendly)](docs/voice.en-US.md)**.
 
 ## Configuration Files
 

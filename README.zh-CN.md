@@ -160,6 +160,8 @@ auto_takeover=true
 /zstdnet stop     停止代理
 ```
 
+**语音模组也零配置**：插件端同样自动兼容 Simple Voice Chat / Plasmo Voice。插件会扫描 `plugins/voicechat/`、`plugins/PlasmoVoice/` 找出语音监听的独立 UDP 端口，玩家进服时把端口下发给 ZstdNet 客户端 mod（走 Bukkit 插件消息，对原版玩家无副作用），客户端自动在本机为这些端口开监听。默认 `tunnel` 隧道——**语音也走 `listen` 入口端口这一个口**，无需再单独放行语音端口；也可在配置里改 `voice_transport=bridge`。探测不到时可用 `extra_udp_ports` 手填。完整说明与边界见下方「[Simple Voice Chat / Plasmo Voice 这类语音模组能不能用](#simple-voice-chat--plasmo-voice-这类语音模组能不能用)」。
+
 **混合端怎么选**：Arclight / Mohist / CatServer 等底层是 Forge/NeoForge，**既能放 mod 也能放插件**：
 
 - 最省心：直接用本插件（丢进 `plugins/`），不依赖混合端对 coremod/自动接管的兼容性。
@@ -329,7 +331,7 @@ mc.example.com:35565
 
 ### Simple Voice Chat / Plasmo Voice 这类语音模组能不能用？
 
-可以，而且是**零配置**的。语音流量不压缩，只做原样转发。ZstdNet 会自动探测后端常见语音模组（Simple Voice Chat、Plasmo Voice）监听的独立 UDP 端口，并把它们一起接管，玩家进服后自动在客户端本机为这些端口开监听——无需你手动填任何端口。
+可以，而且是**零配置**的（**mod 服与插件端都适用**）。语音流量不压缩，只做原样转发。ZstdNet 会自动探测后端常见语音模组（Simple Voice Chat、Plasmo Voice）监听的独立 UDP 端口，并把它们一起接管，玩家进服后自动在客户端本机为这些端口开监听——无需你手动填任何端口。（插件端在 `plugins/voicechat/`、`plugins/PlasmoVoice/` 下探测，并用 Bukkit 插件消息把端口下发给客户端 mod。）
 
 语音有两种传输方式，由服务端配置 `voice_transport` 控制：
 
@@ -343,6 +345,8 @@ mc.example.com:35565
 - **其它 UDP 模组**：自动探测覆盖不到的，可以用 `extra_udp_ports` 手动补一份端口清单。
 - 如果语音路由没起来，游戏本身的 TCP 连接仍然正常，只是语音会离线。
 - 旧版 `voice_chat_listen` / `voice_chat_target` 仍然保留兼容；`/zstdport voice <端口>`、`/zstdport zstdvoice <端口>` 仍可手动调整。
+
+> 📖 想要**手把手、零基础**的图文步骤（玩家怎么进服说话 / 服主怎么放行端口 / tunnel 与 bridge 怎么选 / 各类语音 mod 一览），见 **[语音 mod 使用指南（小白向）](docs/voice.zh-CN.md)**。
 
 ## 配置文件
 
