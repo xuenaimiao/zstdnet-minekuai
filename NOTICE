@@ -1,0 +1,24 @@
+ZstdNet
+=======
+
+This software is a derivative work based on ZstdNet by wish
+(original project: https://github.com/wish131400/zstdnet), used under the
+terms of the MIT License.
+
+  Copyright (c) 2026 wish — original author
+                            https://github.com/wish131400/zstdnet
+  Copyright (c) 2026 xuenai · 麦块联机 / MineKuai — modifications and additions
+                            https://minekuai.com
+
+The complete MIT License text is in the accompanying LICENSE file, which is
+also bundled inside every distributed jar.
+
+--------------------------------------------------------------------------
+Third-party components bundled in the distributed jar
+--------------------------------------------------------------------------
+
+zstd-jni — https://github.com/luben/zstd-jni
+  Copyright (c) 2015-present Luben Karavelov
+  Licensed under the BSD 2-Clause License.
+  Bundles the Zstandard (zstd) library — https://github.com/facebook/zstd
+  Copyright (c) Meta Platforms, Inc. and affiliates — BSD 2-Clause License.

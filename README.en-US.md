@@ -549,6 +549,21 @@ Note: if you later change the server's dictionary, players who cached the old on
 
 - zstd-jni
 
+## Credits & Provenance
+
+This project is a derivative work based on **ZstdNet** by **wish**
+([wish131400/zstdnet](https://github.com/wish131400/zstdnet), MIT License), maintained and extended by
+**xuenai · 麦块联机 / MineKuai ([minekuai.com](https://minekuai.com))**. The original author retains their
+copyright; the copyright of the additions and modifications in this repository belongs to this project's
+maintainer. The whole remains distributed under the MIT License.
+
+Bundled third-party component: [zstd-jni](https://github.com/luben/zstd-jni) (Luben Karavelov, BSD 2-Clause),
+which embeds [Zstandard](https://github.com/facebook/zstd) (Meta, BSD 2-Clause). See the `LICENSE` and `NOTICE`
+files shipped alongside the release and bundled inside every jar.
+
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the **MIT License**.
+
+- Copyright (c) 2026 wish (original author — https://github.com/wish131400/zstdnet)
+- Copyright (c) 2026 xuenai · 麦块联机 / MineKuai (https://minekuai.com) — modifications and additions
