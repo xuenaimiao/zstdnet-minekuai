@@ -22,11 +22,14 @@ package cn.tohsaka.factory.zstdnet.server;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
@@ -36,7 +39,7 @@ import java.util.logging.Logger;
  * （与 Forge/Fabric 变体的 {@code ServerProxyBootstrap} 同理）。职责取专用服子集：
  * <ul>
  *   <li>{@code onEnable}：确保配置存在（缺失则写插件端默认，auto_takeover=false、独立监听端口）→ 启动代理；</li>
- *   <li>用异步调度器周期轮询配置文件变更做热重载（替代 mod 端的 server tick 钩子）；</li>
+ *   <li>用独立守护线程周期轮询配置文件变更做热重载（不依赖服务端调度器，兼容 Folia 等多线程服务端）；</li>
  *   <li>{@code /zstdnet status|reload|start|stop} 管理命令。</li>
  * </ul>
  * 不做「拒绝原版直连后端」的逻辑——插件端 server-port 本就要给原版玩家直连。
@@ -44,12 +47,13 @@ import java.util.logging.Logger;
 public final class ServerProxyBootstrap {
 
     private static final ServerProxyRuntime RUNTIME = new ServerProxyRuntime();
-    /** 配置热重载轮询间隔（tick）；100 tick ≈ 5 秒。 */
-    private static final long WATCH_INTERVAL_TICKS = 100L;
+    /** 配置热重载轮询间隔（秒）。 */
+    private static final long WATCH_INTERVAL_SECONDS = 5L;
 
     private static Plugin plugin;
     private static Logger logger;
-    private static BukkitTask watcher;
+    private static ScheduledExecutorService watcherExec;
+    private static ScheduledFuture<?> watcher;
     private static volatile int backendPort;
 
     private ServerProxyBootstrap() {
@@ -67,9 +71,16 @@ public final class ServerProxyBootstrap {
         RUNTIME.start(backendPort);
         logProxyState("started");
 
-        // 异步轮询配置磁盘变更：代理 start/stop 自带 lifecycleLock，且只触碰 RUNTIME 与 logger，不触碰 Bukkit API，可安全离开主线程。
-        watcher = Bukkit.getScheduler().runTaskTimerAsynchronously(
-            pl, ServerProxyBootstrap::tick, WATCH_INTERVAL_TICKS, WATCH_INTERVAL_TICKS);
+        // 用独立守护线程轮询配置磁盘变更：代理 start/stop 自带 lifecycleLock，tick() 只触碰 RUNTIME 与 logger、
+        // 不触碰任何 Bukkit API，因此与服务端线程模型无关——Spigot/Paper/Purpur/Folia/混合端 全部通用，
+        // 不依赖 Bukkit 调度器（Folia 已移除旧调度器的同步方法）。
+        watcherExec = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "zstdnet-bukkit-config-watcher");
+            t.setDaemon(true);
+            return t;
+        });
+        watcher = watcherExec.scheduleWithFixedDelay(
+            ServerProxyBootstrap::tick, WATCH_INTERVAL_SECONDS, WATCH_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     /**
@@ -85,8 +96,12 @@ public final class ServerProxyBootstrap {
      */
     public static void shutdown() {
         if (watcher != null) {
-            watcher.cancel();
+            watcher.cancel(false);
             watcher = null;
+        }
+        if (watcherExec != null) {
+            watcherExec.shutdownNow();
+            watcherExec = null;
         }
         RUNTIME.stop();
     }

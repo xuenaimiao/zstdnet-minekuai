@@ -2,7 +2,10 @@ name: ${mod_name}
 version: ${mod_version}
 main: cn.tohsaka.factory.zstdnet.Zstdnet
 api-version: '1.20'
-description: Transparent ZSTD compression proxy for Bukkit/Spigot/Paper and hybrid servers (minekuai.com).
+# The proxy core runs on its own socket threads (no world/entity/main-thread access);
+# config polling uses a standalone daemon thread. Safe under Folia's regionized threading.
+folia-supported: true
+description: Transparent ZSTD compression proxy for Bukkit/Spigot/Paper/Folia and hybrid servers (minekuai.com).
 author: wish
 website: https://minekuai.com
 load: POSTWORLD

@@ -62,6 +62,9 @@ test {
 }
 
 processResources {
+    // expand 默认按平台字符集读文件，Windows 上会破坏 plugin.yml 里的非 ASCII；锁定 UTF-8。
+    filteringCharset = 'UTF-8'
+
     def replaceProperties = [
         mod_id     : mod_id,
         mod_name   : mod_name,
