@@ -41,8 +41,9 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
 推荐客户端和服务端都安装本模组。
 
 - 当前仓库已同步支持：
-  Forge 1.19.2、Forge 1.20.1、NeoForge 1.20.1、NeoForge 1.21.1、Fabric 1.20.1、Fabric 1.21.1、NeoForge 26.1、Fabric 26.1
+  Forge 1.18.2、Forge 1.19.2、Forge 1.20.1、NeoForge 1.20.1、NeoForge 1.21.1、Fabric 1.20.1、Fabric 1.21.1、NeoForge 26.1、Fabric 26.1
   （26.1 构建覆盖整个 26.1.x 线，即 26.1.1 / 26.1.2；需要 Java 25）
+  （1.18.2 为 Forge 专属；其实体级变换收益自动退化为版本无关的去交错，详见下文「实体包流变换」）
 - **插件端（无需 mod 加载器）**：Bukkit / Spigot / Paper / Purpur，以及 Arclight / Mohist 等混合端 —— 详见下方「[插件端 / 混合端](#插件端--混合端bukkit--spigot--paper--arclight--mohist)」
 - 普通连接远程 ZstdNet 服务器时：客户端需要安装
 - 使用内置 Zstd 服务端入口时：服务端需要安装

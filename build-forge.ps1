@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('1.20.1', '1.19.2')]
+    [ValidateSet('1.20.1', '1.19.2', '1.18.2')]
     [string]$MinecraftVersion = '1.20.1'
 )
 

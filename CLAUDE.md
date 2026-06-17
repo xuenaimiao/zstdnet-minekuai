@@ -17,13 +17,14 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is nine parallel, independent projects
-(eight mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
+This is **not a single Gradle project**. It is ten parallel, independent projects
+(nine mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
 — there is no root settings.gradle), plus a shared **`mods/common`** source-only module that is the
 single source of truth for the loader-agnostic core:
 
 ```
 mods/common                      single-source core (compiled into every variant)
+mods/1.18.2/zstdnet-forge        Forge 1.18.2        JDK 17
 mods/1.19.2/zstdnet-forge        Forge 1.19.2        JDK 17
 mods/1.20.1/zstdnet-forge        Forge 1.20.1        JDK 17
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17  (reuses forge's integration layer)

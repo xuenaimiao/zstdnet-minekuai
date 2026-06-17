@@ -35,6 +35,7 @@ in `mods/common`, and a variant is just a thin loader-integration layer that pul
 Existing variants (templates):
 
 ```
+mods/1.18.2/zstdnet-forge        Forge 1.18.2      JDK 17   coremods
 mods/1.19.2/zstdnet-forge        Forge 1.19.2      JDK 17   coremods
 mods/1.20.1/zstdnet-forge        Forge 1.20.1      JDK 17   coremods
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1   JDK 17   coremods, BORROWS forge's integration layer (see §7b)
@@ -329,3 +330,48 @@ no `remapJar`. `zstdnet.mixins.json` → `compatibilityLevel "JAVA_25"`; `fabric
 `PayloadTypeRegistry.playS2C()/playC2S()` → `clientboundPlay()/serverboundPlay()`.
 
 **NeoForge networking (26.1):** `PacketDistributor.sendToServer(...)` (in-handler) → `context.reply(...)`.
+
+---
+
+## 11. Minecraft 1.18.2 (pre-1.19) — back-port deltas
+
+Going **older** than 1.19.2 (e.g. the Forge 1.18.2 variant) crosses two 1.19 API breaks plus a
+handful of pre-1.19 renames. Toolchain is unchanged from 1.19.2 (**JDK 17, Gradle 8.8, ForgeGradle
+`[6.0.24,6.2)`** — confirmed: FG6 sets up 1.18.2 fine). `gradle.properties` → `forge_version=40.3.x`,
+`mods.toml` → `loaderVersion="[40,)"` + minecraft `versionRange="[1.18.2,1.19)"`, `pack.mcmeta`
+→ `"pack_format": 8`. The shared `mods/common` core compiles unchanged.
+
+**Text / chat API (1.19 introduced the `Component` factories):**
+- `Component.translatable(k, …)` → `new TranslatableComponent(k, …)`; `Component.literal(s)` →
+  `new TextComponent(s)` (`net.minecraft.network.chat.{TranslatableComponent,TextComponent}`).
+- `entity.sendSystemMessage(Component)` → `entity.sendMessage(Component, net.minecraft.Util.NIL_UUID)`.
+- *Unchanged*: `ClickEvent`/`HoverEvent` are still concrete classes (became interfaces only in 26.1);
+  `Connection.setupCompression(int, boolean)` already takes the 2-arg form in 1.18.2.
+
+**Forge event renames (the 1.19 `ScreenEvent` re-nest + a few others):**
+- `ScreenEvent.Init.Post` → `ScreenEvent.InitScreenEvent.Post` (`getListenersList()/addListener()/
+  removeListener()` unchanged); `ScreenEvent.Render.Pre/Post` → `ScreenEvent.DrawScreenEvent.Pre/Post`
+  (accessor is `getPoseStack()`); `ScreenEvent.KeyPressed.Pre` → `ScreenEvent.KeyboardKeyPressedEvent.Pre`;
+  `ScreenEvent.MouseButtonPressed.Pre` → `ScreenEvent.MouseClickedEvent.Pre`.
+- `ScreenEvent.Opening` → **top-level** `net.minecraftforge.client.event.ScreenOpenEvent` (only
+  `getScreen()` = the screen being opened; no `getCurrentScreen()` — read the outgoing screen from the
+  public field `Minecraft.getInstance().screen`, still valid at event time).
+- `ScreenEvent.Closing` **does not exist** in 1.18.2 → drop the handler; screen-keyed `WeakHashMap`
+  state self-clears on GC.
+- `RenderGuiEvent.Post` → `RenderGameOverlayEvent.Post`; its PoseStack accessor is `getMatrixStack()`
+  (the `getPoseStack()` rename landed in 1.19's `RenderGuiEvent`).
+- `ClientPlayerNetworkEvent.LoggingIn/LoggingOut` → `LoggedInEvent/LoggedOutEvent`.
+- *Unchanged*: `RegisterClientCommandsEvent`, `PlayerEvent.PlayerLoggedInEvent` (`getEntity()` works),
+  `TickEvent.ServerTickEvent`, `ServerStartedEvent`/`ServerStoppingEvent`.
+
+**Forge networking (`SimpleChannel.MessageBuilder`):** `.consumerMainThread(X::handle)` →
+`.consumer(X::handle)` (1.18.2 has no `consumerMainThread`; the handlers already `enqueueWork(...)`
++ `setPacketHandled(true)` themselves, so the raw `.consumer` is a drop-in).
+
+**Client server-list (`ServerList`):** no by-IP `get(String)` and no 2-arg `add(ServerData, boolean)`
+in 1.18.2 → dedup by iterating `for (i<size()) get(int)` comparing `.ip`, and `add(ServerData)` 1-arg.
+
+**Coremods:** no change. SRG ids (`m_6328_`/`m_7038_`/`m_139777_`/`m_130136_`) are stable across
+1.18.2↔1.19.2↔1.20.1; `ConnectScreen.startConnecting` is the 4-arg form (the `isQuickPlay` boolean is
+1.20+), matching the 1.19.2 descriptor. (`new ResourceLocation(String, String)` is merely deprecated
+in 1.18.2 — a warning, not an error.)
