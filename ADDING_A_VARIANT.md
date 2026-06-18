@@ -298,7 +298,7 @@ reference. One 26.1 variant covers the whole `26.1.x` line (26.1.1 / 26.1.2).
   fails with "Failed to load JUnit Platform" (Gradle 9 no longer adds the launcher automatically).
 
 **Pinned versions (26.1.2):** `neo_version=26.1.2.76`, ModDevGradle `2.0.141`; Fabric
-`loader_version=0.19.3`, `fabric_api_version=0.151.0+26.1.2`, `loom_version=1.16.3`; zstd-jni `1.5.7-7`.
+`loader_version=0.19.2`, `fabric_api_version=0.151.0+26.1.2`, `loom_version=1.16.3`; zstd-jni `1.5.7-7`.
 
 **NeoForge build.gradle:** toolchain 25; `neoforge.mods.toml` → `javaVersion="[25,)"`, minecraft
 `versionRange="[26.1,26.2)"`. zstd-jni is bundled+relocated via `com.gradleup.shadow` (Gradle-9
