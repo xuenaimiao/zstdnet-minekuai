@@ -16,7 +16,8 @@ in `mods/common`, and a variant is just a thin loader-integration layer that pul
 > server-only (no client layer); `BukkitPlatform.configDir()` points at the plugin data folder;
 > the bootstrap runs the proxy on a **separate listen port** (`auto_takeover=false`, written via
 > `ServerProxyConfigFile.writePluginDefaults`); `zstd-jni` is bundled with `com.gradleup.shadow`
-> instead of `jarJar`/`include`; and the source set **excludes** `server/DedicatedServerAutoPort.java`
+> instead of `jarJar`/`include` **and relocated** to `cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd`
+> (so it can't clash with a host-provided zstd-jni, e.g. on Mohist); and the source set **excludes** `server/DedicatedServerAutoPort.java`
 > (the lone `net.minecraft.*`-importing common file) — its MC-free parts live in
 > `server/AutoPortPlan` + `server/DedicatedAutoPortState`.
 
@@ -300,8 +301,13 @@ reference. One 26.1 variant covers the whole `26.1.x` line (26.1.1 / 26.1.2).
 `loader_version=0.19.3`, `fabric_api_version=0.151.0+26.1.2`, `loom_version=1.16.3`; zstd-jni `1.5.7-7`.
 
 **NeoForge build.gradle:** toolchain 25; `neoforge.mods.toml` → `javaVersion="[25,)"`, minecraft
-`versionRange="[26.1,26.2)"`. ModDevGradle **removed `additionalRuntimeClasspath`** — rely on
-`jarJar(implementation(...))` for zstd-jni.
+`versionRange="[26.1,26.2)"`. zstd-jni is bundled+relocated via `com.gradleup.shadow` (Gradle-9
+compatible **9.x**, not the 8.3.x used on Gradle 8 variants), **not** `jarJar` — `shadowJar` flattens
+it into the mod jar, relocates `com.github.luben.zstd` → `cn.tohsaka.factory.zstdnet.shaded.…`, and
+`exclude 'module-info.class'` drops the nested module so it can't collide with a host zstd-jni (Mohist).
+ModDevGradle **removed `additionalRuntimeClasspath`** — keep `implementation 'com.github.luben:zstd-jni:1.5.7-7'`
+(it's on the moddev dev-run/test classpath with the original package) plus a `shadowBundle` config holding
+the same coordinate as the only thing shadow merges.
 
 **Fabric build.gradle (un-obfuscated Loom):** apply via `plugins { id 'net.fabricmc.fabric-loom'
 version "${loom_version}" }` (resolved from the fabric maven in `settings.gradle` pluginManagement).

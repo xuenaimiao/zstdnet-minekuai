@@ -44,8 +44,9 @@ The **`mods/bukkit/zstdnet-bukkit`** plugin is server-side only (no mod loader).
 `mods/common` proxy core but, because a plugin loads *after* the MC port is bound, it cannot relocate
 the backend — it runs the proxy on a **separate listen port** (`auto_takeover=false`) and forwards to
 the local MC server. It compiles against Spigot-API (`compileOnly`) + slf4j (`compileOnly`, provided
-by Paper/Spigot at runtime), bundles `zstd-jni` via the `com.gradleup.shadow` fat-jar (no relocation —
-zstd-jni loads natives by package path), and targets Java 17 bytecode so one jar runs on both 1.20.1
+by Paper/Spigot at runtime), bundles `zstd-jni` via the `com.gradleup.shadow` fat-jar **relocated** to
+`cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd` (so it can't clash with a host-provided
+zstd-jni, e.g. Mohist's), and targets Java 17 bytecode so one jar runs on both 1.20.1
 (JDK 17) and 1.21.x (JDK 21) servers. It **excludes** `server/DedicatedServerAutoPort.java` from its
 source set (that file is the only common file importing `net.minecraft.*`; the plugin never relocates
 ports). To make that exclusion possible, the MC-free pieces of auto-takeover were split out of
@@ -178,10 +179,21 @@ To build a single variant manually, set `JAVA_HOME`/`PATH` to the matching JDK a
 the variant's project dir:
 `& ..\..\..\..\zstdnet-build\tools\gradle-8.8\bin\gradle.bat --project-cache-dir <cache> build`
 
-On Forge/NeoForge, `jarJar` bundles `zstd-jni` into the final jar (a slim jar is built then
-deleted in favor of the all-in-one). The Bukkit plugin instead bundles `zstd-jni` with the
-`com.gradleup.shadow` fat-jar (`shadowJar`, classifier `''`; the thin `jar` is deleted). The mod
-version is in each variant's `gradle.properties` (`mod_version`).
+How `zstd-jni` is bundled differs by variant family:
+- **Forge 1.18.2 / 1.19.2 / 1.20.1** (and forge-style `1.20.1-neoforge`): `jarJar` embeds the
+  un-relocated `zstd-jni` as a nested jar (a slim jar is built then deleted in favor of the all-in-one).
+- **NeoForge 1.21.1 / 26.1** (ModDevGradle) and the **Bukkit** plugin: `com.gradleup.shadow` flattens
+  `zstd-jni` into the final jar and **relocates** `com.github.luben.zstd` →
+  `cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd`, dropping the nested module entirely
+  (`shadowJar` is the artifact, classifier `''`; the slim/thin `jar` is deleted). This is what lets the
+  jar run on hosts that ship their own zstd-jni — e.g. **Mohist injects `zstd-jni` into the boot module
+  layer**, and an un-relocated bundle would crash with JPMS *"reads more than one module named
+  com.github.luben.zstd_jni"*. Relocation is **native-safe**: zstd-jni's native libs live at the **jar
+  root** (`linux/amd64/…`, `win/amd64/…`, not under the package) and load by absolute classpath path +
+  `os.name`/`os.arch`, none of which a package rename touches. (The remaining Forge variants would hit
+  the same Mohist clash; relocating them means staging shadow *before* ForgeGradle's `reobf` — not yet done.)
+
+The mod version is in each variant's `gradle.properties` (`mod_version`).
 
 ## Tests & regression
 

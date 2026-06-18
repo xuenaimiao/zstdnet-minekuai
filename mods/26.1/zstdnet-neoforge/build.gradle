@@ -3,6 +3,10 @@ plugins {
     id 'idea'
     id 'maven-publish'
     id 'net.neoforged.moddev' version '2.0.141'
+    // 用 shadow 把 zstd-jni 扁平化 + 重定位进最终 mod jar（替代 jarJar 的嵌套模块），
+    // 避免与宿主（如 Mohist 自带的 zstd-jni）撞同名 JPMS 模块 com.github.luben.zstd_jni。
+    // 注意：26.1 用 gradle-9.4.1，需 Gradle 9 兼容的 shadow 9.x（8.3.x 仅支持 Gradle 8）。
+    id 'com.gradleup.shadow' version '9.0.0'
 }
 
 version = mod_version
@@ -68,15 +72,17 @@ repositories {
     }
 }
 
+// shadow 只合并这个配置里的依赖——仅 zstd-jni，绝不把 Minecraft/NeoForge 误打进 jar。
+configurations {
+    shadowBundle
+}
+
 dependencies {
-    jarJar(implementation('com.github.luben:zstd-jni:1.5.7-7')) {
-        version {
-            strictly '[1.5.7-7]'
-            prefer '1.5.7-7'
-        }
-    }
-    // 26.1 (unobfuscated) moddev 不再提供 additionalRuntimeClasspath；
-    // zstd-jni 已通过上面的 jarJar(implementation(...)) 进入实现 + 运行时类路径。
+    // 编译期 + dev 运行期用原包名 com.github.luben.zstd（26.1 moddev 不再提供 additionalRuntimeClasspath，
+    // implementation 已在 moddev 的 dev run 类路径上）；重定位只发生在 shadowJar 产物里。
+    implementation 'com.github.luben:zstd-jni:1.5.7-7'
+    // ★ 唯一被 shadow 合并进最终 jar 的依赖（会被重定位到 cn.tohsaka...shaded.*）。
+    shadowBundle 'com.github.luben:zstd-jni:1.5.7-7'
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     // Gradle 9 不再自动把启动器加入测试运行时类路径，需显式声明，否则 :test 报 "Failed to load JUnit Platform"。
@@ -106,7 +112,14 @@ processResources {
     }
 }
 
-jar {
+// shadowJar 是最终发布产物：把 zstd-jni 扁平化进 mod jar 并重定位包名、剥掉其 module-info
+// （这样就不再有第二个名为 com.github.luben.zstd_jni 的 JPMS 模块——Mohist 上的冲突根源消失）。
+shadowJar {
+    archiveClassifier = ''
+    configurations = [project.configurations.shadowBundle]   // 只合并 zstd-jni
+    relocate 'com.github.luben.zstd', 'cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd'
+    exclude 'module-info.class'
+    mergeServiceFiles()
     manifest {
         attributes([
             'Specification-Title'    : mod_id,
@@ -118,4 +131,18 @@ jar {
             'Automatic-Module-Name'  : "${mod_group_id}.${mod_id}"
         ])
     }
+}
+
+// 原 jar 改成 slim 并在 build 后删除，最终只保留 shadowJar 产物。
+jar {
+    archiveClassifier = 'slim'
+}
+
+tasks.register('deleteSlimJar', Delete) {
+    delete tasks.named('jar').flatMap { it.archiveFile }
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+    finalizedBy tasks.named('deleteSlimJar')
 }

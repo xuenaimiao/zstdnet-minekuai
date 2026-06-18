@@ -78,9 +78,12 @@ processResources {
 }
 
 // 把 zstd-jni 打进 fat-jar（插件无 jarJar/include 机制）。
-// 不重定位 com.github.luben.zstd：zstd-jni 按包路径加载各平台原生库，重定位会破坏原生加载。
+// 重定位 com.github.luben.zstd 到私有命名空间，避免与宿主（如 Mohist/Arclight 自带的 zstd-jni）
+// 撞类/撞 JPMS 模块。重定位对原生加载安全：zstd-jni 的原生库在 jar 根目录（linux/amd64/…、win/amd64/…），
+// 由绝对 classpath 路径 + os.name/os.arch 加载，不在 com/github/luben/zstd/ 包路径下，故包重定位不影响它。
 shadowJar {
     archiveClassifier = ''
+    relocate 'com.github.luben.zstd', 'cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd'
 }
 
 jar {
