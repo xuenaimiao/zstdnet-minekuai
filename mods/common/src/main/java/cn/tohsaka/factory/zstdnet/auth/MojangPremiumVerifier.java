@@ -126,7 +126,9 @@ public final class MojangPremiumVerifier {
                 }
             }
             return new VerifiedProfile(uuid, name, List.copyOf(properties));
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | StackOverflowError e) {
+            // 任何畸形会话服响应（含 MiniJson 深嵌套兜底外的 StackOverflowError）均安全归一为「未通过=null」，
+            // 使两条登录路线（coremod catch(Throwable) / Fabric CompletableFuture）都走显式失败策略。
             return null;
         }
     }

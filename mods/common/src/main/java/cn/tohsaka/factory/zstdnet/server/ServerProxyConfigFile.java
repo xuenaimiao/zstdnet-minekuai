@@ -396,6 +396,8 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "#                online-mode=false 则纯离线、不验证。", lineSeparator);
         appendLine(builder, "#   on：无论 online-mode 为何都强制开启验证。", lineSeparator);
         appendLine(builder, "#   off：强制关闭（纯离线）。若此时 online-mode=true，原版加密生效、压缩收益归零（会有 WARN 提示）。", lineSeparator);
+        appendLine(builder, "# 注意：本组 premium_* 项仅在服务器【启动时】读取（加密是否开启是 initServer 一次性决定），", lineSeparator);
+        appendLine(builder, "#       改动后需【重启服务器】才生效——运行中热重载本文件不会改变验证/加密状态。", lineSeparator);
         appendLine(builder, "premium_verification=" + props.getProperty("premium_verification"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
@@ -410,6 +412,9 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# 核验时是否把玩家真实 IP 一并交给会话服（类似 prevent-proxy-connections）。默认 false。", lineSeparator);
+        appendLine(builder, "# ★警告：会话服会把此 IP 与客户端调用 joinServer 的 HTTP 出口 IP 做匹配。本 mod 的主场景（FRP/NAT 穿透、", lineSeparator);
+        appendLine(builder, "#   代理转发）下两者常不一致，开启后会导致【正版玩家被误判】（strict 拒绝 / lenient 静默降级离线身份）。", lineSeparator);
+        appendLine(builder, "#   仅当你的代理能 100% 还原与客户端公网出口一致的 IP（如已正确配置 PROXY protocol v2 真实 IP 还原）时才开启。", lineSeparator);
         appendLine(builder, "premium_pass_real_ip=" + props.getProperty("premium_pass_real_ip"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 

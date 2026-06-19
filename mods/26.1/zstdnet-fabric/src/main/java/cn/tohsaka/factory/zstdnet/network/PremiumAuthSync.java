@@ -34,7 +34,6 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientLoginNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerLoginConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerLoginNetworking;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.User;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;

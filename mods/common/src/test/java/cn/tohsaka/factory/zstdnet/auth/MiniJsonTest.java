@@ -57,4 +57,25 @@ class MiniJsonTest {
         assertThrows(IllegalArgumentException.class, () -> MiniJson.parse("{} junk"));
         assertThrows(IllegalArgumentException.class, () -> MiniJson.parse(null));
     }
+
+    @Test
+    void rejectsDeeplyNestedInsteadOfStackOverflow() {
+        // 深嵌套（恶意/异常的第三方会话服响应）必须以 IllegalArgumentException 拒绝，
+        // 而非 StackOverflowError 逃逸——超深数组与对象两种递归路径都要覆盖。
+        String deepArray = "[".repeat(5000) + "]".repeat(5000);
+        assertThrows(IllegalArgumentException.class, () -> MiniJson.parse(deepArray));
+        StringBuilder deepObject = new StringBuilder();
+        for (int i = 0; i < 5000; i++) {
+            deepObject.append("{\"a\":");
+        }
+        deepObject.append("1").append("}".repeat(5000));
+        assertThrows(IllegalArgumentException.class, () -> MiniJson.parse(deepObject.toString()));
+    }
+
+    @Test
+    void acceptsNestingWithinLimit() {
+        // hasJoined 真实响应仅 ~3 层；限内的合理嵌套仍须正常解析。
+        Object root = MiniJson.parse("[".repeat(32) + "1" + "]".repeat(32));
+        assertTrue(root instanceof List);
+    }
 }

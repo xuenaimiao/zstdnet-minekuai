@@ -33,6 +33,14 @@ import java.util.Map;
  */
 final class MiniJson {
 
+    /**
+     * 递归嵌套深度上限。防止恶意/异常的会话服（{@code premium_session_server} 可配为第三方
+     * authlib-injector / Yggdrasil）返回深嵌套 JSON 触发 {@link StackOverflowError}——
+     * 超限时抛 {@link IllegalArgumentException}（属 {@code RuntimeException}，会被
+     * {@link MojangPremiumVerifier#parse} 安全归一为「未通过=null」）。{@code hasJoined} 正常响应仅 ~3 层，64 足够。
+     */
+    private static final int MAX_DEPTH = 64;
+
     private final String src;
     private int pos;
 
@@ -47,7 +55,7 @@ final class MiniJson {
         }
         MiniJson parser = new MiniJson(json);
         parser.skipWhitespace();
-        Object value = parser.readValue();
+        Object value = parser.readValue(0);
         parser.skipWhitespace();
         if (parser.pos != parser.src.length()) {
             throw new IllegalArgumentException("trailing content at " + parser.pos);
@@ -55,14 +63,14 @@ final class MiniJson {
         return value;
     }
 
-    private Object readValue() {
+    private Object readValue(int depth) {
         if (pos >= src.length()) {
             throw new IllegalArgumentException("unexpected end of json");
         }
         char c = src.charAt(pos);
         return switch (c) {
-            case '{' -> readObject();
-            case '[' -> readArray();
+            case '{' -> readObject(depth);
+            case '[' -> readArray(depth);
             case '"' -> readString();
             case 't', 'f' -> readBoolean();
             case 'n' -> readNull();
@@ -70,7 +78,10 @@ final class MiniJson {
         };
     }
 
-    private Map<String, Object> readObject() {
+    private Map<String, Object> readObject(int depth) {
+        if (depth >= MAX_DEPTH) {
+            throw new IllegalArgumentException("json nested too deep at " + pos);
+        }
         Map<String, Object> obj = new LinkedHashMap<>();
         expect('{');
         skipWhitespace();
@@ -84,7 +95,7 @@ final class MiniJson {
             skipWhitespace();
             expect(':');
             skipWhitespace();
-            obj.put(key, readValue());
+            obj.put(key, readValue(depth + 1));
             skipWhitespace();
             char c = next();
             if (c == '}') {
@@ -96,7 +107,10 @@ final class MiniJson {
         }
     }
 
-    private List<Object> readArray() {
+    private List<Object> readArray(int depth) {
+        if (depth >= MAX_DEPTH) {
+            throw new IllegalArgumentException("json nested too deep at " + pos);
+        }
         List<Object> list = new ArrayList<>();
         expect('[');
         skipWhitespace();
@@ -106,7 +120,7 @@ final class MiniJson {
         }
         while (true) {
             skipWhitespace();
-            list.add(readValue());
+            list.add(readValue(depth + 1));
             skipWhitespace();
             char c = next();
             if (c == ']') {
