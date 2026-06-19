@@ -76,8 +76,14 @@ public final class ServerProxyConfigFile {
         "max_rate_global_bps",
         "burst_bytes",
         "trust_proxy_protocol",
-        "trusted_proxy_ips"
+        "trusted_proxy_ips",
+        "premium_verification",
+        "premium_verification_mode",
+        "premium_session_server",
+        "premium_pass_real_ip"
     );
+    private static final String DEFAULT_PREMIUM_VERIFICATION = "auto";
+    private static final String DEFAULT_PREMIUM_VERIFICATION_MODE = "lenient";
 
     private ServerProxyConfigFile() {
     }
@@ -139,6 +145,26 @@ public final class ServerProxyConfigFile {
 
     public static int readVoiceTargetPort() {
         return parsePort(loadProperties().getProperty("voice_chat_target", defaultVoiceChatTarget()), defaultVoiceChatTargetPort());
+    }
+
+    /** 内置正版验证总开关原始值（auto / on / off）。 */
+    public static String readPremiumVerification() {
+        return loadProperties().getProperty("premium_verification", DEFAULT_PREMIUM_VERIFICATION).trim();
+    }
+
+    /** 验证不通过策略原始值（lenient / strict）。 */
+    public static String readPremiumVerificationMode() {
+        return loadProperties().getProperty("premium_verification_mode", DEFAULT_PREMIUM_VERIFICATION_MODE).trim();
+    }
+
+    /** 会话服务基址（留空=Mojang 官方）。 */
+    public static String readPremiumSessionServer() {
+        return loadProperties().getProperty("premium_session_server", "").trim();
+    }
+
+    /** 核验时是否附带玩家真实 IP。 */
+    public static boolean readPremiumPassRealIp() {
+        return Boolean.parseBoolean(loadProperties().getProperty("premium_pass_real_ip", "false").trim());
     }
 
     public static void writeListenPort(int port) throws IOException {
@@ -293,6 +319,10 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("burst_bytes", "262144");
         props.putIfAbsent("trust_proxy_protocol", "false");
         props.putIfAbsent("trusted_proxy_ips", DEFAULT_TRUSTED_PROXY_IPS);
+        props.putIfAbsent("premium_verification", DEFAULT_PREMIUM_VERIFICATION);
+        props.putIfAbsent("premium_verification_mode", DEFAULT_PREMIUM_VERIFICATION_MODE);
+        props.putIfAbsent("premium_session_server", "");
+        props.putIfAbsent("premium_pass_real_ip", "false");
         return props;
     }
 
@@ -355,6 +385,32 @@ public final class ServerProxyConfigFile {
 
         appendLine(builder, "# 后端 Minecraft 目标地址。示例：127.0.0.1:25566", lineSeparator);
         appendLine(builder, "target=" + props.getProperty("target"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# ===== 内置正版（online-mode）账号验证 =====", lineSeparator);
+        appendLine(builder, "# ZSTD 只能压缩明文，原版加密一旦开启压缩收益归零，所以 zstdnet 接管后后端必须以离线方式运行。", lineSeparator);
+        appendLine(builder, "# 本功能在登录阶段用一条自定义查询让客户端本地向 Mojang 证明账号所有权（access token 不出客户端），", lineSeparator);
+        appendLine(builder, "# 服务端再用 hasJoined 核验、拿到真实正版 UUID/皮肤——全程不开加密，压缩照常。无需再额外装 TrueUUID 等 mod。", lineSeparator);
+        appendLine(builder, "#   auto（默认）：跟随 server.properties 的 online-mode——online-mode=true 即视为「要正版验证」，", lineSeparator);
+        appendLine(builder, "#                自动开启验证并在运行时把后端切到离线（仅内存生效，不改你磁盘上的 online-mode）；", lineSeparator);
+        appendLine(builder, "#                online-mode=false 则纯离线、不验证。", lineSeparator);
+        appendLine(builder, "#   on：无论 online-mode 为何都强制开启验证。", lineSeparator);
+        appendLine(builder, "#   off：强制关闭（纯离线）。若此时 online-mode=true，原版加密生效、压缩收益归零（会有 WARN 提示）。", lineSeparator);
+        appendLine(builder, "premium_verification=" + props.getProperty("premium_verification"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 验证不通过（盗版客户端 / 没装 zstdnet / 客户端离线会话）时的处理：", lineSeparator);
+        appendLine(builder, "#   lenient（默认·宽松）：正版玩家拿真实 UUID/皮肤，其余回落到离线 UUID 照常进服。", lineSeparator);
+        appendLine(builder, "#   strict（严格·纯正版）：验证不通过一律拒绝，等价真正版服。", lineSeparator);
+        appendLine(builder, "premium_verification_mode=" + props.getProperty("premium_verification_mode"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 会话服务基址。留空=Mojang 官方。换成 authlib-injector / 自建 Yggdrasil 的 sessionserver 基址即可对接外置登录。", lineSeparator);
+        appendLine(builder, "premium_session_server=" + props.getProperty("premium_session_server"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 核验时是否把玩家真实 IP 一并交给会话服（类似 prevent-proxy-connections）。默认 false。", lineSeparator);
+        appendLine(builder, "premium_pass_real_ip=" + props.getProperty("premium_pass_real_ip"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# 是否透传 Simple Voice Chat 的 UDP。", lineSeparator);

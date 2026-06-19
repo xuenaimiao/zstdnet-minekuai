@@ -31,7 +31,9 @@ online-mode=false
 - `online-mode=false`：关闭后端的正版验证（代理转发场景需要）。
 - `network-compression-threshold`：**不用管**，ZstdNet 启动时会自动接管这一项。
 
-> 还想保留正版校验？可额外搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)（离线模式下尽量保留正版 UUID/皮肤）。
+> **想要内置正版验证（Fabric 1.20.1/1.21.1/26.1 已支持）**：直接把 `online-mode=true` 即可——ZstdNet 默认 `premium_verification=auto` 会自动开启验证并在运行时把后端切到离线以保住压缩（不改你磁盘上的 `online-mode`），正版玩家保留真实 UUID/皮肤，无需再装 TrueUUID。详见仓库 `PREMIUM_VERIFICATION.md`。
+>
+> **Forge / NeoForge 暂未内置**该功能：请仍设 `online-mode=false`，如需保留正版身份可额外搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)（离线模式下尽量保留正版 UUID/皮肤）。
 
 ### 2. 放入服务端 jar
 

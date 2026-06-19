@@ -89,13 +89,17 @@ online-mode=false
 
 如果后端服务器继续启用原版验证，连接可能失败；如果原版网络压缩没有被 ZstdNet 接管，压缩收益也会明显低于预期。
 
-如果你仍然希望保留正版校验能力，可以额外搭配 [TrueUUID（正版离线共存）](https://www.curseforge.com/minecraft/mc-mods/trueuuid)。
+### 内置正版验证（无需额外装 mod）
 
-- 这个模组适合“后端保持 `online-mode=false`，但登录阶段仍然执行正版校验”的场景
-- 可以在离线模式下尽量保留正版 UUID、名称大小写与皮肤属性等信息
-- 对于需要离线转发、内网穿透、代理链路，同时又不想完全放弃正版验证的服务器来说会比较实用
+ZstdNet 现在可以**内置**正版账号验证：在登录阶段用一条自定义查询让客户端本地向 Mojang 证明账号所有权（access token 不出客户端），服务端核验后保留真实正版 UUID/皮肤——全程不开加密，压缩照常。这样在离线后端上也能验证正版，**无需再额外安装 TrueUUID 等 mod**。
 
-也就是说，ZstdNet 负责接管压缩与转发；如果你还需要正版验证，可以再配合 TrueUUID 这类模组一起使用。
+- 配置项 `premium_verification`（`config/zstdnet-server.properties`）默认 `auto`：**跟随 `server.properties` 的 `online-mode`**。也就是说，你照常把想要正版验证的服设成 `online-mode=true` 即可——ZstdNet 会自动开启内置验证，并在运行时把后端切到离线以保住压缩（**不改你磁盘上的 `online-mode`**）。`on`/`off` 可手动强制。
+- `premium_verification_mode`：`lenient`（默认，正版玩家拿真实 UUID、其余离线进服）/ `strict`（仅允许正版）。
+- 也支持对接 authlib-injector / 自建 Yggdrasil（`premium_session_server`）。
+
+> **当前仅 Fabric 变体（1.20.1 / 1.21.1 / 26.1）内置了该功能**；Forge / NeoForge 待实现（详见仓库 `PREMIUM_VERIFICATION.md`）。在尚未支持的加载器上，请仍按上面把后端设 `online-mode=false`（如需保留正版身份可搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)）；ZstdNet 不会在无法验证时擅自把后端改成离线。
+>
+> 注意：开启内置验证后，被验证玩家会用正版 UUID，原离线 `playerdata` 不会自动迁移（与任何离线→在线切换相同）。
 
 ## 专用服怎么配置
 
@@ -563,6 +567,25 @@ mc.example.com:35565
 ## 依赖
 
 - zstd-jni
+
+## 相对原版的新增内容
+
+本仓库由 **xuenai · 麦块联机** 在原项目 [wish131400/zstdnet](https://github.com/wish131400/zstdnet) 基础上深度二次开发。
+原版已具备 ZSTD 压缩代理、自动接管（`auto_takeover`）、同端口 UDP 透传、HUD 与多加载器
+（Forge / Fabric / NeoForge）等基础能力，但仅覆盖 1.20.1 / 1.21.1。在此之上，本仓库新增与扩展了：
+
+- **大幅扩展版本与平台**
+  - 新增 **Forge 1.18.2**、**Forge 1.19.2**、以及 **Minecraft 26.1（26.1.1 / 26.1.2，NeoForge + Fabric，非混淆新时代）**
+  - 新增**插件端 / 混合端变体**（Bukkit / Spigot / Paper / Purpur、Arclight / Mohist 等）：一个 jar 跨 1.20.1 与 1.21.x，并**支持 Folia**
+- **压缩能力增强（全部 opt-in、默认关闭、对未升级客户端线兼容）**
+  - **长距离匹配（LDM）**：面向高重复大结构服务器进一步提压
+  - **训练字典 + 零配置自动分发**：`dictionary_auto=true` 一键，自动采样 → 后台训练 → 热插启用 → 下发玩家，无需重启或手动分发
+- **实体包流变换（`transform`）**：面向大量实体 / 生物场景（机械动力契约体、刷怪塔、怪潮），在 ZSTD 之前对下行包流做可逆去交错，显著提升这类场景压缩率；协商生效、默认关闭、`fail-closed` 不损坏数据
+- **语音模组零配置兼容**：在原版同端口 UDP 透传之上，新增**自动探测后端 Simple Voice Chat / Plasmo Voice 的独立 UDP 端口**并接管，玩家进服自动开监听、服主免手填；支持 `tunnel`（语音复用入口单端口）/ `bridge` 两种传输（mod 服与插件端均适用）
+- **架构与合规**
+  - 核心收敛为**单一真源**（`mods/common` + Platform SPI），改共享逻辑只改一处即可传播到所有变体
+  - 补充完整的二次开发署名、致谢与 `LICENSE` / `NOTICE`（随每个 jar 分发）
+  - 新增中英文新手图文指南与语音模组使用指南（见 [`docs/`](docs/README.md)）
 
 ## 致谢与来源
 

@@ -87,13 +87,17 @@ online-mode=false
 
 If you keep vanilla authentication enabled on the backend server, connections may fail. If vanilla network compression is not taken over by ZstdNet, compression efficiency may also be much worse than expected.
 
-If you still want premium account verification while keeping the backend in offline mode, you can additionally use [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid).
+### Built-in premium verification (no extra mod needed)
 
-- This is useful for setups where the backend stays on `online-mode=false`, but you still want login-time premium account verification
-- It can help preserve premium UUIDs, correct name casing, and skin-related profile data while running in offline mode
-- This is especially practical for servers that need offline forwarding, NAT traversal, or proxy-style chains without fully giving up premium account checks
+ZstdNet can now verify premium accounts **itself**: during login it uses a custom query that makes the client prove account ownership to Mojang locally (the access token never leaves the client); the server verifies the result and keeps the real premium UUID/skin — all without enabling encryption, so compression still works. This means premium verification on an offline backend **no longer requires a separate mod such as TrueUUID**.
 
-In short, ZstdNet handles compression and forwarding; if you also need premium account verification, you can pair it with a mod such as TrueUUID.
+- The `premium_verification` option (`config/zstdnet-server.properties`) defaults to `auto`: it **follows `server.properties`'s `online-mode`**. So you just set a premium server to `online-mode=true` as usual — ZstdNet enables built-in verification automatically and forces the backend to offline mode at runtime to keep compression working (**without rewriting `online-mode` on disk**). Use `on`/`off` to force it.
+- `premium_verification_mode`: `lenient` (default — premium players get their real UUID, others fall back to an offline UUID) or `strict` (premium-only).
+- authlib-injector / self-hosted Yggdrasil is supported via `premium_session_server`.
+
+> **Currently the built-in feature ships only in the Fabric variants (1.20.1 / 1.21.1 / 26.1).** Forge / NeoForge support is planned (see `PREMIUM_VERIFICATION.md`). On loaders without built-in support, keep the backend on `online-mode=false` as above (optionally pairing [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) to preserve premium identity); ZstdNet will not silently switch the backend to offline when it cannot verify.
+>
+> Note: once built-in verification is on, verified players use their premium UUID, and existing offline `playerdata` is not migrated automatically (same as any offline→online switch).
 
 ## Dedicated Server Setup
 

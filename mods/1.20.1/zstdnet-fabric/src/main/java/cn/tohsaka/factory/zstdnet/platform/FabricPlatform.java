@@ -38,4 +38,10 @@ public final class FabricPlatform implements Platform {
     public boolean isClient() {
         return FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT;
     }
+
+    @Override
+    public boolean supportsPremiumVerification() {
+        // Fabric 变体已实现登录阶段正版验证（PremiumAuthSync + ServerLoginPacketListenerImplAccessor）。
+        return true;
+    }
 }

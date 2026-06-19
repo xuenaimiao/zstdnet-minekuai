@@ -19,6 +19,8 @@
 
 package cn.tohsaka.factory.zstdnet.server;
 
+import cn.tohsaka.factory.zstdnet.auth.PremiumAuthState;
+import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import net.minecraft.server.dedicated.DedicatedServer;
 import net.minecraft.server.dedicated.DedicatedServerProperties;
 import net.minecraft.server.dedicated.DedicatedServerSettings;
@@ -59,20 +61,31 @@ public final class DedicatedServerAutoPort {
     ) {
         if (server == null || current == null || server.isSingleplayer()) {
             DedicatedAutoPortState.clear();
+            PremiumAuthState.disable();
             return current;
         }
 
         AutoPortConfig config = loadConfig();
         if (!config.enabled) {
             DedicatedAutoPortState.clear();
+            PremiumAuthState.disable();
             return current;
         }
 
-        boolean shouldForceCompressionThreshold = shouldForceCompressionThreshold();
+        // A0 自动检测：跟随 server.properties 的 online-mode（管理员意图）解析三态总开关。
+        // 仅当本加载器变体实现了登录挂钩时才启用，否则保持历史行为（绝不在无法验证时擅自把后端切离线）。
+        boolean onlineMode = readOnlineMode();
+        boolean platformSupports = Platforms.get().supportsPremiumVerification();
+        boolean verificationEnabled = platformSupports
+            && PremiumAuthState.resolveEnabled(ServerProxyConfigFile.readPremiumVerification(), onlineMode);
+        boolean forceOfflineMode = verificationEnabled;
+        // 验证启用 → 后端切离线（保压缩）；或后端本就离线 → 照常接管压缩。
+        boolean shouldForceCompressionThreshold = verificationEnabled || !onlineMode;
+        applyPremiumAuthState(verificationEnabled, onlineMode, platformSupports);
 
         if (!config.autoTakeover) {
             DedicatedAutoPortState.clear();
-            DedicatedServerProperties rewritten = rewriteProperties(current, null, shouldForceCompressionThreshold);
+            DedicatedServerProperties rewritten = rewriteProperties(current, null, shouldForceCompressionThreshold, forceOfflineMode);
             if (rewritten == null) {
                 LOGGER.error("[zstdnet-server] failed to force dedicated compression threshold. Keeping current server.properties values.");
                 return current;
@@ -94,7 +107,7 @@ public final class DedicatedServerAutoPort {
             DedicatedAutoPortState.clear();
             return current;
         }
-        DedicatedServerProperties rewritten = rewriteProperties(current, backendPort, shouldForceCompressionThreshold);
+        DedicatedServerProperties rewritten = rewriteProperties(current, backendPort, shouldForceCompressionThreshold, forceOfflineMode);
         if (rewritten == null) {
             LOGGER.error("[zstdnet-server] auto takeover could not rewrite dedicated server properties. Falling back to manual mode.");
             DedicatedAutoPortState.clear();
@@ -132,7 +145,8 @@ public final class DedicatedServerAutoPort {
         return rewritten;
     }
 
-    private static boolean shouldForceCompressionThreshold() {
+    /** 读取 server.properties 的 online-mode（管理员意图）；缺失/读失败按原版默认 true 处理。 */
+    private static boolean readOnlineMode() {
         Path path = Path.of("server.properties");
         if (!Files.exists(path)) {
             return true;
@@ -144,7 +158,34 @@ public final class DedicatedServerAutoPort {
             LOGGER.warn("[zstdnet-server] failed reading {} while checking online-mode: {}", path, e.toString());
             return true;
         }
-        return !parseBoolean(props.getProperty("online-mode"), true);
+        return parseBoolean(props.getProperty("online-mode"), true);
+    }
+
+    /** 据解析结果写入 {@link PremiumAuthState}，并在各遗留/未支持态打 WARN。 */
+    private static void applyPremiumAuthState(boolean verificationEnabled, boolean onlineMode, boolean platformSupports) {
+        if (verificationEnabled) {
+            boolean strict = PremiumAuthState.resolveStrict(ServerProxyConfigFile.readPremiumVerificationMode());
+            PremiumAuthState.configure(
+                true,
+                strict,
+                ServerProxyConfigFile.readPremiumSessionServer(),
+                ServerProxyConfigFile.readPremiumPassRealIp()
+            );
+            LOGGER.info("[zstdnet-server] built-in premium verification enabled (mode={}); backend forced to offline-mode in memory so zstd compression stays effective.",
+                strict ? "strict" : "lenient");
+            return;
+        }
+        PremiumAuthState.disable();
+        if (!onlineMode) {
+            return;
+        }
+        // online-mode=true 但未启用验证：要么本加载器尚未实现挂钩，要么管理员显式关掉了。
+        boolean wantsVerification = PremiumAuthState.resolveEnabled(ServerProxyConfigFile.readPremiumVerification(), true);
+        if (!platformSupports && wantsVerification) {
+            LOGGER.warn("[zstdnet-server] built-in premium verification is not implemented on this loader yet; keeping vanilla online-mode/encryption (so zstd compression yields almost nothing). Use a Fabric build for built-in verification, or set online-mode=false (optionally pairing TrueUUID). See PREMIUM_VERIFICATION.md.");
+        } else {
+            LOGGER.warn("[zstdnet-server] online-mode=true but premium_verification=off -> vanilla encryption stays on and zstd compression yields almost nothing. Set premium_verification=auto/on to keep both premium identity and compression.");
+        }
     }
 
     static AutoPortPlan activePlan() {
@@ -237,7 +278,8 @@ public final class DedicatedServerAutoPort {
     private static DedicatedServerProperties rewriteProperties(
         DedicatedServerProperties current,
         Integer backendPort,
-        boolean forceCompressionThreshold
+        boolean forceCompressionThreshold,
+        boolean forceOfflineMode
     ) {
         try {
             Properties base = extractProperties(current);
@@ -248,6 +290,12 @@ public final class DedicatedServerAutoPort {
             }
             if (forceCompressionThreshold) {
                 copy.setProperty("network-compression-threshold", String.valueOf(ZSTD_COMPRESSION_THRESHOLD));
+            }
+            if (forceOfflineMode) {
+                // 仅内存生效：本钩子在 DedicatedServer.initServer() 读取 props 之后、调用 setUsesAuthentication(props.onlineMode)
+                // 之前替换该局部变量，故 online-mode=false 会被采用、原版加密不触发，zstd 压缩照常。
+                // 切勿回写磁盘 server.properties —— 磁盘上的 online-mode 要保留作为下次启动 auto 判定的「管理员意图」信号。
+                copy.setProperty("online-mode", "false");
             }
             return new DedicatedServerProperties(copy);
         } catch (Exception e) {
@@ -367,7 +415,7 @@ public final class DedicatedServerAutoPort {
             LOGGER.info("[zstdnet-server] forced dedicated network-compression-threshold={} for built-in zstd proxy.", ZSTD_COMPRESSION_THRESHOLD);
             return;
         }
-        LOGGER.info("[zstdnet-server] keeping dedicated network-compression-threshold unchanged because server.properties has online-mode=true.");
+        LOGGER.info("[zstdnet-server] keeping dedicated network-compression-threshold unchanged because online-mode=true and premium_verification=off.");
     }
 
     private record AutoPortConfig(
