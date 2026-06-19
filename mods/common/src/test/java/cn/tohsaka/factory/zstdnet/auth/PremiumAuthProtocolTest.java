@@ -57,4 +57,23 @@ class PremiumAuthProtocolTest {
         payload[0] = 99; // corrupt version byte
         assertNull(PremiumAuthProtocol.decodeChallenge(payload));
     }
+
+    @Test
+    void channelPathServerIdRoundTrips() {
+        byte[] nonce = HexFormat.of().parseHex("00112233445566778899aabbccddeeff");
+        String serverId = PremiumAuthProtocol.serverIdFromNonce(nonce);
+        String path = PremiumAuthProtocol.channelPathWithServerId(serverId);
+        assertEquals("auth/00112233445566778899aabbccddeeff", path);
+        assertEquals(serverId, PremiumAuthProtocol.serverIdFromChannelPath(path));
+    }
+
+    @Test
+    void channelPathRejectsForeignOrMalformed() {
+        assertNull(PremiumAuthProtocol.serverIdFromChannelPath(null));
+        assertNull(PremiumAuthProtocol.serverIdFromChannelPath("auth")); // no nonce
+        assertNull(PremiumAuthProtocol.serverIdFromChannelPath("other/00ff")); // wrong prefix
+        assertNull(PremiumAuthProtocol.serverIdFromChannelPath("auth/")); // empty nonce
+        assertNull(PremiumAuthProtocol.serverIdFromChannelPath("auth/NOTHEX")); // non-hex (also upper)
+        assertNull(PremiumAuthProtocol.serverIdFromChannelPath("auth/00ff/x")); // illegal trailing
+    }
 }

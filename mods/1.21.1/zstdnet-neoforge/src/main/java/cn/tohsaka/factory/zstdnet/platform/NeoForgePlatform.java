@@ -41,4 +41,10 @@ public final class NeoForgePlatform implements Platform {
     public boolean isClient() {
         return FMLEnvironment.dist == Dist.CLIENT;
     }
+
+    @Override
+    public boolean supportsPremiumVerification() {
+        // 登录阶段正版验证已由 coremod/PremiumAuth{Server,Client}Hooks + coremods/zstdnet_premium_auth.js 实现。
+        return true;
+    }
 }

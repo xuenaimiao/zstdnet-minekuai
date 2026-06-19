@@ -2,9 +2,10 @@
 
 ZstdNet 现在可以**内置**「正版账号验证」，让正版玩家在离线后端上保留真实 UUID / 皮肤，**无需再额外安装 TrueUUID 等 mod**。
 
-> **当前进度**：核心 + 自动检测 + **Fabric 三个变体（1.20.1 / 1.21.1 / 26.1）已实现并通过编译验证**；
-> **Forge / NeoForge 六个变体尚未实现**（见下「待办」）。在未实现的加载器上，行为与历史版本完全一致——
-> 绝不会在「无法验证」的情况下擅自把后端切成离线（不会静默丢失正版身份）。
+> **当前进度**：核心 + 自动检测 + **全部 9 个模组变体已实现并通过构建验证**——
+> Fabric（1.20.1 / 1.21.1 / 26.1，走 fabric-api 登录网络）与 **Forge / NeoForge（1.18.2 / 1.19.2 / 1.20.1
+> Forge + 1.20.1 / 1.21.1 / 26.1 NeoForge，走 coremod ASM）**。**Bukkit 插件端仍不支持**（独立代理无法挂钩 MC 登录）。
+> 所有变体目前均为**构建验证**（编译 + 单测 + 全量打包），运行正确性仍待真实环境实测。
 
 ---
 
@@ -44,42 +45,54 @@ ZSTD 只能压缩明文。原版 online-mode 的加密握手（`EncryptionReques
 
 ## 3. 实现状态
 
-| 变体 | 登录挂钩 | 构建验证 | 运行验证 |
-|---|---|---|---|
-| 共享核心 `mods/common`（协议/验证器/MiniJson/配置/A0/状态） | — | ✅ 全工具链编译 + 单测通过 | — |
-| Fabric 1.20.1 | ✅ | ✅ `build` 通过 | ⏳ 待实测 |
-| Fabric 1.21.1 | ✅ | ✅ `build` 通过 | ⏳ 待实测 |
-| Fabric 26.1 | ✅ | ✅ `build` 通过 | ⏳ 待实测 |
-| Forge 1.18.2 | ❌ 待实现 | （仅共享核心，随 ForgeGradle 编译） | — |
-| Forge 1.19.2 | ❌ 待实现 | （同上） | — |
-| Forge 1.20.1 | ❌ 待实现 | ✅ `compileJava+test`（共享核心） | — |
-| NeoForge 1.20.1 | ❌ 待实现（复用 forge-1.20.1 的 java/资源） | （随 forge-1.20.1） | — |
-| NeoForge 1.21.1 | ❌ 待实现 | ✅ `compileJava+test`（共享核心） | — |
-| NeoForge 26.1 | ❌ 待实现 | ✅ `compileJava+test`（共享核心） | — |
+| 变体 | 登录挂钩 | 机制 | 构建验证 | 运行验证 |
+|---|---|---|---|---|
+| 共享核心 `mods/common`（协议/验证器/MiniJson/配置/A0/状态） | — | — | ✅ 全工具链编译 + 单测通过 | — |
+| Fabric 1.20.1 | ✅ | Mixin + fabric-api 登录网络 | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 1.21.1 | ✅ | 同上 | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 26.1 | ✅ | 同上 | ✅ `build` 通过 | ⏳ 待实测 |
+| Forge 1.18.2 | ✅ | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| Forge 1.19.2 | ✅ | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| Forge 1.20.1 | ✅ | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| NeoForge 1.20.1 | ✅（复用 forge-1.20.1 的 java/资源/Platform） | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| NeoForge 1.21.1 | ✅ | coremod ASM（现代流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| NeoForge 26.1 | ✅ | coremod ASM（现代流程） | ✅ `build` 通过 | ⏳ 待实测 |
 
-> 所有变体目前都只是**编译验证**；运行正确性（真实正版账号进服拿到正确 UUID/皮肤、压缩仍生效、盗版客户端按策略处理）需在真实环境实测。
+> 所有变体目前都只是**构建验证**（编译 + 单测 + 全量打包，含 Forge `reobf` 与 NeoForge `shadow`，且确认 jar 内打入了
+> `coremods/zstdnet_premium_auth.js`、`coremods.json` 登记与两个 hook 类）；运行正确性（真实正版账号进服拿到正确
+> UUID/皮肤、压缩仍生效、盗版客户端按策略处理）需在真实环境实测。
 
-### 已落地的文件（Fabric + 共享）
-- 共享：`mods/common/.../auth/PremiumAuthProtocol.java`、`MojangPremiumVerifier.java`、`MiniJson.java`（零依赖 JSON）、`PremiumAuthState.java`；`server/ServerProxyConfigFile.java`（新键+模板）、`server/DedicatedServerAutoPort.java`（A0 自动检测）；`platform/Platform.java`（新增 `supportsPremiumVerification()`，默认 false）。
+### 已落地的文件
+- 共享：`mods/common/.../auth/PremiumAuthProtocol.java`（含 coremod 路线的 `channelPathWithServerId`/`serverIdFromChannelPath`/`COREMOD_TRANSACTION_ID`）、`MojangPremiumVerifier.java`、`MiniJson.java`（零依赖 JSON）、`PremiumAuthState.java`；`server/ServerProxyConfigFile.java`（新键+模板）、`server/DedicatedServerAutoPort.java`（A0 自动检测）；`platform/Platform.java`（新增 `supportsPremiumVerification()`，默认 false）。
 - Fabric ×3：`mixin/ServerLoginPacketListenerImplAccessor.java`、`network/PremiumAuthSync.java`、`platform/FabricPlatform.java`(override→true)，并登记进 `zstdnet.mixins.json`、接线进 `Zstdnet`/`ZstdnetClient`。
+- Forge/NeoForge ×（5 套源码，nf1201 复用 forge1201）：`coremod/PremiumAuthServerHooks.java`、`coremod/PremiumAuthClientHooks.java`、`resources/coremods/zstdnet_premium_auth.js`（登记进 `META-INF/coremods.json`）、`platform/*Platform.java`(override→true)。**coremod 是声明式的，无需在 `Zstdnet`/`ServerProxyBootstrap` 接线**。
 - 单测：`mods/common/src/test/java/.../auth/`（协议/验证器/状态/MiniJson）。
 
 ---
 
-## 4. 待办：Forge / NeoForge 实现指南
+## 4. Forge / NeoForge 实现说明（coremod ASM）
 
-Forge/NeoForge 用 coremod（ASM），没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1.21.1/26.1）砍掉了登录 wrapper**，其网络 API 指向 *configuration* 阶段（在 `LoginSuccess` **之后**，来不及改 UUID）。故这些变体需**直接拦截 vanilla 登录类**。
+Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1.21.1/26.1）砍掉了登录 wrapper**，其网络 API 指向 *configuration* 阶段（在 `LoginSuccess` **之后**，来不及改 UUID）。故这些变体**用 coremod（ASM）直接拦截 vanilla 登录类**——与已有的三处补丁点（连接接管 / LAN 压缩阈值 / 真实 IP）同一机制（`resources/coremods/*.js` + `META-INF/coremods.json` → 调静态 hook 类）。
 
-**实现步骤（每个变体新增 `coremod/PremiumAuthHooks.java` + coremod JS，并接线）：**
+**两套模板**（按登录流程分；`coremods/zstdnet_premium_auth.js` 各含 2 个 transformer：server + client）：
 
-1. 客户端登录挂钩：注入 `net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl` 的「处理 login 自定义查询」路径，识别 `zstdnet:auth` → 调 `joinServer` → 回 `ServerboundCustomQueryAnswerPacket`。
-2. 服务端登录挂钩：注入 `net.minecraft.server.network.ServerLoginPacketListenerImpl`：
-   - **现代（1.21.1/26.1）流程**：状态机 `HELLO → (offline) startClientVerification → VERIFYING → tick() → verifyLoginAndFinishConnectionSetup → finishLoginAndWaitForClient(LoginSuccess)`。在 `verifyLoginAndFinishConnectionSetup` HEAD 拦截：首次进入时发 `ClientboundCustomQueryPacket`、把 state 改成 `NEGOTIATING`、记 pending、取消本次；在 `handleCustomQueryPacket(ServerboundCustomQueryAnswerPacket)` HEAD 拦截我方 transactionId：核验→成功则 set `authenticatedProfile`、state 改回 `VERIFYING`（让 tick 再次进入并放行），失败则按策略 `disconnect`。
-   - **旧（1.18.2/1.19.2/1.20.1）流程**：字段名是 `gameProfile`（非 `authenticatedProfile`），状态枚举/方法名不同；亦可用 Forge `SimpleChannel` 的 login 包（`markAsLoginPacket()`/`loginIndex`）+ `PlayerNegotiationEvent` 延迟，再用 accessor 换 `gameProfile`。
-   - GameProfile 替换需 coremod accessor（参考已落地的 Fabric `ServerLoginPacketListenerImplAccessor`）。
-3. `Platform#supportsPremiumVerification()` 在该变体的 `*Platform` 里 override 返回 `true`（这样 A0 才会对该变体启用）。
+- **旧版流程（Forge 1.18.2 / 1.19.2 / 1.20.1，NeoForge 1.20.1 复用）**：
+  - 服务端门控注入 `handleAcceptedLogin()`（用「**唯一构造 `ClientboundGameProfilePacket` 的 `()V` 方法**」结构特征定位，避免依赖被混淆的方法名）首部：`if (!beforeFinalizeLogin(this)) return;`。早返回时 state 仍为 `READY_TO_ACCEPT`，`tick()` 下一 tick 再次调用 → 天然轮询；原版 600-tick 慢登录超时仍生效。
+  - 服务端应答拦截注入 `handleCustomQueryPacket(ServerboundCustomQueryPacket)`（按描述符唯一定位）首部，识别我方事务号。
+- **现代流程（NeoForge 1.21.1 / 26.1）**：
+  - 服务端门控注入 `verifyLoginAndFinishConnectionSetup(GameProfile)`（用「**唯一构造 `ClientboundLoginCompressionPacket` 的 `(GameProfile)V` 方法**」定位，区别于同描述符的 `startClientVerification`/`finishLoginAndWaitForClient`）首部。早返回时 state 仍为 `VERIFYING` → tick 轮询。
+  - 服务端应答拦截注入 `handleCustomQueryPacket(ServerboundCustomQueryAnswerPacket)`。
+- **客户端（两套通用）**：注入 `ClientHandshakePacketListenerImpl#handleCustomQuery`（按描述符唯一定位）首部，识别信道 `zstdnet:auth/<serverId>` → 后台 `joinServer` → 回空应答。
 
-**已核验的各版本符号（省去重新调研）：**
+**关键设计点**：
+- **nonce 走信道 `ResourceLocation` 路径**（`zstdnet:auth/<hex>`），非 payload——现代 MC 解码 login 查询时丢弃 payload 字节（`DiscardedQueryPayload`/`skipBytes`），但信道 RL 始终随包读出；`hex` 是 RL path 合法字符。服务端发送用 `new DiscardedQueryPayload(rl)`（write 为空）。见 `PremiumAuthProtocol.channelPathWithServerId/serverIdFromChannelPath`。
+- **应答内容服务端读不到**（现代 payload 同样被丢弃），故服务端不依赖应答字段，而是「收到我方事务号应答」即触发 `hasJoined` 核验——客户端保证先 `joinServer` 再发应答，核验结果为唯一真源。事务号用固定魔数 `COREMOD_TRANSACTION_ID`（避开 Forge 顺序登录索引）。
+- **不改 vanilla 登录 state**：门控仅靠 pending 表早返回 + tick 轮询，无需把 state 改成 `NEGOTIATING` 再改回（避免依赖枚举常量名）。
+- **GameProfile / Connection 字段按类型反射**（非按名），对 Forge SRG 运行时与 NeoForge 官方映射运行时都稳健；旧版 `gameProfile` 与现代 `authenticatedProfile` 均为唯一的 `GameProfile` 类型字段。
+- `Platform#supportsPremiumVerification()` 在各 `*Platform` override 返回 `true`，A0 才对该变体启用。
+- Forge 服务端 `handleCustomQueryPacket` 走 `NetworkHooks.onCustomPayload`（对 `ServerboundCustomQueryPacket`，`getName()==LoginWrapper.WRAPPER`），故必须 HEAD 拦截我方事务号并 `return`，否则会落入 Forge 的 LoginWrapper 处理。
+
+**已核验的各版本符号（实现依据）：**
 
 | 项 | 1.20.1 (authlib 4.0.43) | 1.21.1 (authlib 6.0.54) | 26.1 (authlib 7.0.63, 非混淆) |
 |---|---|---|---|

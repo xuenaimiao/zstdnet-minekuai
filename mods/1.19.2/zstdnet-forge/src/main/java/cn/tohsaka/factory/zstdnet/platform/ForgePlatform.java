@@ -47,4 +47,10 @@ public final class ForgePlatform implements Platform {
         }
         return "\0FML2\0";
     }
+
+    @Override
+    public boolean supportsPremiumVerification() {
+        // 登录阶段正版验证已由 coremod/PremiumAuth{Server,Client}Hooks + coremods/zstdnet_premium_auth.js 实现。
+        return true;
+    }
 }
