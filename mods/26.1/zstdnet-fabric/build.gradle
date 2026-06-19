@@ -28,6 +28,11 @@ base {
     archivesName = "zstdnet-${minecraft_version}-fabric"
 }
 
+// Loom 的最终发布产物 remapJar 默认输出到 base.libsDirectory；把它指到外部构建根的 dist/ 单一目录
+// （文件名已含 MC 版本+加载器，可区分）。dev jar 由 Loom 单独放在 devlibs/，不受影响，故 dist 只含最终发布 jar。
+// 用 libsDirectory（约定来源）而非按任务设 destinationDirectory：Loom 1.16.x 会忽略后者。
+base.libsDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
+
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
 }

@@ -83,6 +83,8 @@ processResources {
 // 由绝对 classpath 路径 + os.name/os.arch 加载，不在 com/github/luben/zstd/ 包路径下，故包重定位不影响它。
 shadowJar {
     archiveClassifier = ''
+    // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含加载器，可区分）。
+    destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
     relocate 'com.github.luben.zstd', 'cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd'
 }
 

@@ -113,6 +113,8 @@ processResources {
 // （这样就不再有第二个名为 com.github.luben.zstd_jni 的 JPMS 模块——Mohist 上的冲突根源消失）。
 shadowJar {
     archiveClassifier = ''
+    // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含 MC 版本+加载器，可区分）。
+    destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
     configurations = [project.configurations.shadowBundle]   // 只合并 zstd-jni
     relocate 'com.github.luben.zstd', 'cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd'
     exclude 'module-info.class'

@@ -163,6 +163,15 @@ distribution at `tools/gradle-9.4.1`) and holds all caches and output jars — `
 directly (not the in-repo wrapper). Required JDKs: `C:\Program Files\Java\jdk-17`,
 `C:\Program Files\Java\jdk-21`, and (for 26.1) JDK 25 (`C:\Users\78569\.jdks\liberica-25.0.3`).
 
+**All final jars land in one shared directory `../zstdnet-build/dist/`** (not the scattered
+per-variant `mods/<ver>/<variant>/libs/`). Every variant's `build.gradle` redirects its final
+artifact task's `destinationDirectory` there — `jarJar` (Forge 1.18.2/1.19.2/1.20.1 + NeoForge
+1.20.1), `shadowJar` (NeoForge 1.21.1/26.1 + Bukkit), or `remapJar` (Fabric). The filename already
+encodes the MC version + loader (`zstdnet-<mc>-<loader>-<mod_version>.jar`, e.g.
+`zstdnet-1.21.1-neoforge-1.4.2-m1.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`), so the ten
+jars coexist in one folder with no collision. The transient slim/thin/dev jars stay in each variant's
+own `libs/` (and the Forge/NeoForge/Bukkit variants delete theirs after build).
+
 PowerShell build scripts at the repo root pick the right JDK and gradle invocation:
 
 ```powershell

@@ -131,6 +131,8 @@ jar {
 
 tasks.named('jarJar') {
     archiveClassifier = ''
+    // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含 MC 版本+加载器，可区分）。
+    destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
 }
 
 tasks.register('deleteSlimJar', Delete) {
