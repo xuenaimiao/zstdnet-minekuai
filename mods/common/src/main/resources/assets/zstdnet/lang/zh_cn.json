@@ -25,6 +25,7 @@
   "zstdnet.hud.client.wire": "线路 上行 %s | 下行 %s",
   "zstdnet.hud.client.raw": "原始 上行 %s | 下行 %s",
   "zstdnet.hud.total_ratio": "总量 %s / %s | 压缩率 %s",
+  "zstdnet.hud.client.cache": "区块缓存 REF %s WARM %s PATCH %s | 省 %s",
   "zstdnet.hud.connections": "连接数 %s",
   "zstdnet.hud.mode.dedicated": "专用服",
   "zstdnet.hud.mode.lan": "局域网",

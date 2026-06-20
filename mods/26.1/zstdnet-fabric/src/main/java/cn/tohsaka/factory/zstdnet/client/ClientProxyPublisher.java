@@ -363,17 +363,22 @@ public final class ClientProxyPublisher {
             if (hudRefresh || cachedClientLines == null) {
                 LocalZstdNet.StatsSnapshot stats = session.statsSnapshot();
                 String clientMode = translateClientHudMode(stats.mode());
-                cachedClientLines = new String[]{
-                    I18n.get("zstdnet.hud.client.title", clientMode, stats.remoteHost(), stats.remotePort()),
-                    I18n.get("zstdnet.hud.client.wire", formatRate(stats.wireUpRate()), formatRate(stats.wireDownRate())),
-                    I18n.get("zstdnet.hud.client.raw", formatRate(stats.rawUpRate()), formatRate(stats.rawDownRate())),
-                    I18n.get(
-                        "zstdnet.hud.total_ratio",
-                        formatSize(stats.wireUpBytes() + stats.wireDownBytes()),
-                        formatSize(stats.rawUpBytes() + stats.rawDownBytes()),
-                        formatPercent(stats.ratioPercent())
-                    )
-                };
+                java.util.List<String> clientLines = new java.util.ArrayList<>(5);
+                clientLines.add(I18n.get("zstdnet.hud.client.title", clientMode, stats.remoteHost(), stats.remotePort()));
+                clientLines.add(I18n.get("zstdnet.hud.client.wire", formatRate(stats.wireUpRate()), formatRate(stats.wireDownRate())));
+                clientLines.add(I18n.get("zstdnet.hud.client.raw", formatRate(stats.rawUpRate()), formatRate(stats.rawDownRate())));
+                clientLines.add(I18n.get(
+                    "zstdnet.hud.total_ratio",
+                    formatSize(stats.wireUpBytes() + stats.wireDownBytes()),
+                    formatSize(stats.rawUpBytes() + stats.rawDownBytes()),
+                    formatPercent(stats.ratioPercent())
+                ));
+                if (stats.hasCacheActivity()) {
+                    clientLines.add(I18n.get("zstdnet.hud.client.cache",
+                        stats.cacheRefHits(), stats.cacheWarmHits(), stats.cachePatchHits(),
+                        formatSize(stats.cacheSavedBytes())));
+                }
+                cachedClientLines = clientLines.toArray(new String[0]);
             }
             renderHudPanel(gui, minecraft, y, cachedClientLines, HUD_CLIENT_BACKGROUND, HUD_CLIENT_TITLE, HUD_CLIENT_TEXT);
         } else {

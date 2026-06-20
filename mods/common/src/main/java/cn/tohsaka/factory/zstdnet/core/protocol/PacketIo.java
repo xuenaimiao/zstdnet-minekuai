@@ -18,6 +18,21 @@ public final class PacketIo {
         return readFully(in, length);
     }
 
+    /**
+     * 同 {@link #readPacket(InputStream)}，但对声明长度设上限——超过即抛 {@link IOException}（防御损坏 / 恶意声明
+     * 导致的超大分配）。用于读取本端自定义控制帧（如跨会话 manifest）。
+     */
+    public static byte[] readPacket(InputStream in, int maxLength) throws IOException {
+        int length = VarIntCodec.read(in);
+        if (length <= 0) {
+            return new byte[0];
+        }
+        if (length > maxLength) {
+            throw new IOException("packet length " + length + " exceeds max " + maxLength);
+        }
+        return readFully(in, length);
+    }
+
     public static void writePacket(OutputStream out, byte[] payload) throws IOException {
         out.write(VarIntCodec.encode(payload.length));
         if (payload.length > 0) {

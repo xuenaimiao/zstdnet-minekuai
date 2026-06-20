@@ -61,6 +61,7 @@ public final class ServerProxyConfigFile {
         "transform",
         "transform_max_version",
         "transform_coalesce_ms",
+        "chunk_cache",
         "dictionary",
         "dictionary_auto",
         "dictionary_capture",
@@ -303,6 +304,7 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("transform", "false");
         props.putIfAbsent("transform_max_version", "3");
         props.putIfAbsent("transform_coalesce_ms", "0");
+        props.putIfAbsent("chunk_cache", "auto");
         props.putIfAbsent("dictionary", "");
         props.putIfAbsent("dictionary_auto", "false");
         props.putIfAbsent("dictionary_capture", "false");
@@ -478,6 +480,21 @@ public final class ServerProxyConfigFile {
 
         appendLine(builder, "# 合并窗口毫秒（预留，暂未启用）：未来用于把多个 flush 窗口合并成更大的块换取更高压缩率。当前恒按 0 处理。", lineSeparator);
         appendLine(builder, "transform_coalesce_ms=" + props.getProperty("transform_coalesce_ms"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# ===== 区块引用缓存 chunk_cache（面向大量重复区块/重访场景）=====", lineSeparator);
+        appendLine(builder, "# auto（默认·推荐）：智能默认——客户端也支持时自动启用“区块引用去重”：相同区块重发只发 8 字节 REF 令牌，", lineSeparator);
+        appendLine(builder, "#   客户端重放本地缓存的原始字节。仅在协商成功时对该连接生效；不支持/未升级的客户端逐字节透传，任何异常自动回退断线重连，绝不发错包。", lineSeparator);
+        appendLine(builder, "#   跨会话：客户端把整发区块落盘，重连时用 manifest 声明已持有的区块，服务端对它们发 16 字节 WARM_REF（无需重传整块）——", lineSeparator);
+        appendLine(builder, "#   这是相对 ZSTD/LDM（仅会话内、窗口内）真正不重叠的收益。auto 还会自适应旁路：连续若干全新区块不划算时暂停缓存、周期重探。", lineSeparator);
+        appendLine(builder, "#   PATCH：同坐标区块发生小改动（放置方块/光照重算等）时，只发相对客户端已持有基线的字节级增量（DELTA），", lineSeparator);
+        appendLine(builder, "#   客户端重建后逐位校验（hash 不符即断线重连，绝不发错包）；结构无关、版本安全。auto 在划算时自动叠加。", lineSeparator);
+        appendLine(builder, "# ref：只做 REF/WARM_REF 引用去重，不做自适应旁路、不做 PATCH（确定性缓存）。", lineSeparator);
+        appendLine(builder, "# full：REF + WARM_REF + 字节级 PATCH（确定性，不自适应旁路）。", lineSeparator);
+        appendLine(builder, "# measure：仅测量、不改任何字节——在服务端日志打印“可被引用缓存去掉多少重复区块流量”，并区分", lineSeparator);
+        appendLine(builder, "#   现有 ZSTD/LDM 窗口已能折叠的部分 与 窗口外/跨重连只有显式缓存才能拿到的边际部分。", lineSeparator);
+        appendLine(builder, "# off：完全关闭，逐字节与历史一致、零开销。", lineSeparator);
+        appendLine(builder, "chunk_cache=" + props.getProperty("chunk_cache"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# ===== 字典（开启可显著提升压缩率，全部默认关闭）=====", lineSeparator);

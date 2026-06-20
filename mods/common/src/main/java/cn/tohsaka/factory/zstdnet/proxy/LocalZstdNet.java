@@ -27,6 +27,13 @@ import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
 import cn.tohsaka.factory.zstdnet.core.protocol.VoiceTunnelFrame;
+import cn.tohsaka.factory.zstdnet.core.cache.CacheStats;
+import cn.tohsaka.factory.zstdnet.core.cache.CacheUntransformingInputStream;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkCacheFormat;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkCacheHandshake;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkCacheStore;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkManifest;
+import cn.tohsaka.factory.zstdnet.core.cache.Hash128;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformHandshake;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import cn.tohsaka.factory.zstdnet.core.transform.UntransformingInputStream;
@@ -79,6 +86,14 @@ public final class LocalZstdNet {
     // 全局而非逐连接：一个游戏实例只有一份客户端配置。各变体在客户端配置(重)加载时调用 configureClientTransform。
     private static volatile TransformOptions clientTransform = TransformOptions.disabled();
 
+    // 客户端区块引用缓存（CRC）偏好。默认开启=advertise ccache 并安装逆向包装——“自动默认、协商后自动启用”。
+    // 仅在服务端也启用并实际下发 CRC 流（ZNCR 魔数）时才生效；否则逆向流自检 MAGIC 不符即原样透传，与历史逐字节一致。
+    private static volatile boolean clientCacheEnabled = true;
+    // 跨会话持久化（v2）：默认开启=把整发区块落盘到 config/zstdnet-cache/<server>/，重连时发 manifest 让服务端
+    // 对已持有区块发 WARM_REF（跨会话省传）。关掉只退化为会话内 REF（仍线兼容、仍 fail-closed）。
+    private static volatile boolean clientCachePersist = true;
+    private static volatile long clientCachePersistBytes = ChunkCacheFormat.DEFAULT_PERSIST_BYTES;
+
     public enum Mode {
         AUTO,
         RAW,
@@ -91,6 +106,24 @@ public final class LocalZstdNet {
     /** 设置客户端变换偏好（由各变体在客户端配置加载时调用）；null 视为关闭。 */
     public static void configureClientTransform(TransformOptions options) {
         clientTransform = options == null ? TransformOptions.disabled() : options;
+    }
+
+    /** 设置客户端区块引用缓存偏好（由各变体在客户端配置加载时调用）；默认开启。 */
+    public static void configureClientCache(boolean enabled) {
+        clientCacheEnabled = enabled;
+    }
+
+    /**
+     * 设置客户端区块引用缓存偏好 + 跨会话持久化（由各变体在客户端配置加载时调用）。
+     *
+     * @param enabled     是否启用 CRC（advertise + 安装逆向包装）
+     * @param persist     是否跨会话落盘持久化（关掉则仅会话内 REF）
+     * @param persistBytes 持久缓存字节预算（磁盘 + 内存 warm 共用；&lt;=0 用默认值）
+     */
+    public static void configureClientCache(boolean enabled, boolean persist, long persistBytes) {
+        clientCacheEnabled = enabled;
+        clientCachePersist = persist;
+        clientCachePersistBytes = persistBytes > 0 ? persistBytes : ChunkCacheFormat.DEFAULT_PERSIST_BYTES;
     }
 
     public static ProxyHandle start(String remoteHost, int remotePort, int level, Mode requestedMode) throws IOException {
@@ -433,6 +466,13 @@ public final class LocalZstdNet {
                 upstream.getRemoteSocketAddress()
             );
 
+            // 跨会话持久化（v2）：打开本服务器的磁盘缓存，取本会话 warm 快照。其键集就是要发给服务端的 manifest，
+            // 也是 WARM_REF 重放的来源。持久化关闭时为 null/空——仍 advertise + 发空 manifest（服务端按 advertise 版本确定读取）。
+            final ChunkCacheStore cacheStore = (clientCacheEnabled && clientCachePersist)
+                ? ChunkCacheStore.open(remoteHost, remotePort, clientCachePersistBytes)
+                : null;
+            final Map<Hash128, byte[]> warmSnapshot = cacheStore != null ? cacheStore.snapshotWarm() : Map.of();
+
             Future<?> upstreamWriter = WORKERS.submit(() -> {
                 try (ZstdOutputStream zstdOut = ZstdStreams.newCompressor(
                     new CountingOutputStream(upstream.getOutputStream(), stats::addClientToServerZstd),
@@ -442,6 +482,10 @@ public final class LocalZstdNet {
                 )) {
                     OutputStream countedRawOut = new CountingOutputStream(zstdOut, stats::addClientToServerRaw);
                     PacketIo.writePacket(countedRawOut, firstPacket);
+                    // advertise 了 ccache（>=v2）就紧跟一个 ZNCM manifest 帧（即便空）——服务端据 advertise 版本恰好读一帧。
+                    if (clientCacheEnabled) {
+                        PacketIo.writePacket(countedRawOut, ChunkManifest.encode(warmSnapshot.keySet()));
+                    }
                     countedRawOut.flush();
                     StreamTransfer.copyAndFlush(client.getInputStream(), countedRawOut);
                 } catch (Exception ignored) {
@@ -459,8 +503,16 @@ public final class LocalZstdNet {
                     options,
                     clientDict
                 )) {
-                    // 启用变换时套上逆向包装；MAGIC 自检：若服务端实际未变换则原样透传，不破坏字节。
-                    InputStream downstream = clientTransform.enabled() ? new UntransformingInputStream(zstdIn) : zstdIn;
+                    // 启用变换 / CRC 时套上逆向包装；各层 MAGIC 自检：服务端实际未用该层则原样透传，不破坏字节。
+                    // CRC 在最外层（与服务端编码端 CRC-在-zstd-之前 对称）；CRC 与实体变换服务端互斥，故至多一层生效、另一层透传。
+                    InputStream downstream = zstdIn;
+                    if (clientTransform.enabled()) {
+                        downstream = new UntransformingInputStream(downstream);
+                    }
+                    if (clientCacheEnabled) {
+                        downstream = new CacheUntransformingInputStream(
+                            downstream, ChunkCacheFormat.DEFAULT_CACHE_BYTES, warmSnapshot, cacheStore, stats.cacheStats);
+                    }
                     StreamTransfer.copyAndFlush(downstream, new CountingOutputStream(client.getOutputStream(), stats::addServerToClientRaw));
                 } catch (Exception ignored) {
                 } finally {
@@ -594,6 +646,10 @@ public final class LocalZstdNet {
         TransformOptions ct = clientTransform;
         if (ct.enabled()) {
             hostSuffix = hostSuffix + TransformHandshake.advertiseSuffix(ct.maxVersion());
+        }
+        // advertise 区块引用缓存能力（服务端据此决定是否对下行启用 CRC）。默认开启 → 自动协商；与 xform 标记独立共存。
+        if (clientCacheEnabled) {
+            hostSuffix = hostSuffix + ChunkCacheHandshake.advertiseSuffix(ChunkCacheFormat.MAX_SUPPORTED_VERSION);
         }
         byte[] hostBytes = (host + hostSuffix).getBytes(StandardCharsets.UTF_8);
         return ByteArrayOps.concat(
@@ -1150,8 +1206,16 @@ public final class LocalZstdNet {
         long rawDownRate,
         long wireUpRate,
         long wireDownRate,
-        double ratioPercent
+        double ratioPercent,
+        long cacheRefHits,
+        long cacheWarmHits,
+        long cachePatchHits,
+        long cacheSavedBytes
     ) {
+        /** 区块引用缓存是否产生过收益（任一 REF/WARM/PATCH 命中）。 */
+        public boolean hasCacheActivity() {
+            return cacheRefHits > 0 || cacheWarmHits > 0 || cachePatchHits > 0;
+        }
     }
 
     private static final class ProxyStats {
@@ -1161,6 +1225,8 @@ public final class LocalZstdNet {
         private final AtomicLong rawDownBytes = new AtomicLong();
         private final AtomicLong wireUpBytes = new AtomicLong();
         private final AtomicLong wireDownBytes = new AtomicLong();
+        /** 客户端区块引用缓存命中计数（由各连接的 CacheUntransformingInputStream 旁路更新）。 */
+        private final CacheStats cacheStats = new CacheStats();
 
         private volatile long sampleAtMs = System.currentTimeMillis();
         private volatile long sampledRawUpBytes;
@@ -1246,7 +1312,11 @@ public final class LocalZstdNet {
                 rawDownRate,
                 wireUpRate,
                 wireDownRate,
-                ratio
+                ratio,
+                cacheStats.refHits(),
+                cacheStats.warmHits(),
+                cacheStats.patchHits(),
+                cacheStats.savedBytes()
             );
         }
 

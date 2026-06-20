@@ -19,6 +19,14 @@
 
 package cn.tohsaka.factory.zstdnet.server;
 
+import cn.tohsaka.factory.zstdnet.core.cache.CacheMode;
+import cn.tohsaka.factory.zstdnet.core.cache.CacheTransformingOutputStream;
+import cn.tohsaka.factory.zstdnet.core.cache.CacheablePacketTable;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkCacheFormat;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkCacheHandshake;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkCacheMeasurement;
+import cn.tohsaka.factory.zstdnet.core.cache.ChunkManifest;
+import cn.tohsaka.factory.zstdnet.core.cache.Hash128;
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.core.compress.DictionaryFiles;
 import cn.tohsaka.factory.zstdnet.core.compress.DictionarySampler;
@@ -69,6 +77,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -142,6 +151,8 @@ final class ServerProxyRuntime {
     private TrafficStats stats;
     private volatile ProxyConfig cfg;
     private volatile DictionarySampler dictionarySampler;
+    /** chunk_cache=measure 模式的只读埋点（懒初始化，全运行时一份，跨连接累计跨会话重复统计）。 */
+    private volatile ChunkCacheMeasurement chunkCacheMeasurement;
     /** dictionary_auto 模式的后台「采样够了就训练」轮询器。 */
     private ScheduledExecutorService autoDictWatcher;
     /**
@@ -501,6 +512,8 @@ final class ServerProxyRuntime {
                 ZstdInputStream upstreamDecompressor = null;
                 int clientTransformVersion = 0;
                 int clientProtocolVersion = 0;
+                int clientChunkCacheVersion = 0;
+                Set<Hash128> clientWarmSet = Set.of();
                 try {
                     upstreamDecompressor = ZstdStreams.newDecompressor(
                         new CountingInputStream(pushIn, stats::addZstdUp), cfg.compression, upstreamDict);
@@ -508,10 +521,26 @@ final class ServerProxyRuntime {
                     HandshakeRewrite rewrite = rewriteLoginHandshake(firstPacket, backendSourceIp);
                     clientTransformVersion = rewrite.transformVersion();
                     clientProtocolVersion = rewrite.protocolVersion();
+                    clientChunkCacheVersion = rewrite.chunkCacheVersion();
+                    OutputStream upstreamOut = upstream.getOutputStream();
                     if (firstPacket.length > 0) {
-                        OutputStream upstreamOut = upstream.getOutputStream();
                         PacketIo.writePacket(upstreamOut, rewrite.packet());
                         stats.addRawUp(VarIntCodec.encode(rewrite.packet().length).length + rewrite.packet().length);
+                    }
+                    // 跨会话 manifest（v2，c2s）：客户端 advertise ccache>=2 时，会在握手后插入一个 ZNCM 帧列出它磁盘已持有的区块。
+                    // 必须读掉它（不转发后端）以对齐流；自纠错：若该帧不以 ZNCM 起头（版本错配 / 客户端没发），则它其实是
+                    // 真正的 c2s 包（如 login-start），原样转发后端，连接照常。
+                    if (clientChunkCacheVersion >= ChunkCacheFormat.VERSION_MANIFEST) {
+                        byte[] manifestFrame = PacketIo.readPacket(upstreamDecompressor, ChunkCacheFormat.MAX_MANIFEST_BYTES);
+                        List<Hash128> parsed = ChunkManifest.parse(manifestFrame);
+                        if (parsed == null) {
+                            if (manifestFrame.length > 0) {
+                                PacketIo.writePacket(upstreamOut, manifestFrame);
+                                stats.addRawUp(VarIntCodec.encode(manifestFrame.length).length + manifestFrame.length);
+                            }
+                        } else if (cfg.chunkCache.engagesCache() && !parsed.isEmpty()) {
+                            clientWarmSet = new HashSet<>(parsed);
+                        }
                     }
                 } catch (Exception handshakeErr) {
                     if (upstreamDecompressor != null) {
@@ -526,10 +555,32 @@ final class ServerProxyRuntime {
                     return;
                 }
 
-                // 下行是否变换：服务端开关 + 客户端 advertise；字典连接优先用字典（关变换），避免二者冲突。
+                // 下行区块引用缓存（chunk_cache=ref/full/auto）：需客户端 advertise ccache + 该协议有可缓存包表；字典连接跳过。
+                final CacheablePacketTable cacheableTable =
+                    (cfg.chunkCache.engagesCache() && clientChunkCacheVersion >= ChunkCacheFormat.VERSION_REF && !downstreamDict)
+                        ? CacheablePacketTable.forProtocol(clientProtocolVersion)
+                        : null;
+                final boolean chunkCacheActive = cacheableTable != null && !cacheableTable.isEmpty();
+                // 协商出的生效 CRC 版本（写入 s2c PREAMBLE；>=2 才发 WARM_REF）。warm 集合仅在 v2 生效时携带。
+                final int chunkCacheVersion = chunkCacheActive
+                    ? Math.min(clientChunkCacheVersion, ChunkCacheFormat.MAX_SUPPORTED_VERSION)
+                    : 0;
+                final Set<Hash128> chunkWarm = chunkCacheVersion >= ChunkCacheFormat.VERSION_MANIFEST
+                    ? clientWarmSet : Set.of();
+                // AUTO 才启用自适应旁路（显式 ref/full 则确定性缓存，不旁路）。
+                final int chunkCacheBypassWindow = cfg.chunkCache == CacheMode.AUTO
+                    ? ChunkCacheFormat.DEFAULT_AUTO_BYPASS_WINDOW : 0;
+                // 结构无关 PATCH（v3）：需生效版本>=3（客户端 advertise>=3）且 mode∈{FULL,AUTO}；ref 模式只发显式 REF。
+                final boolean chunkCachePatch = chunkCacheVersion >= ChunkCacheFormat.VERSION_PATCH
+                    && cfg.chunkCache.engagesPatch();
+                // clientProtocolVersion 非 final（握手后赋值），lambda 捕获需快照（仅供 PATCH 选可选结构解析器）。
+                final int chunkProtocolVersion = clientProtocolVersion;
+
+                // 下行是否实体变换：服务端开关 + 客户端 advertise；字典连接跳过；CRC 生效时跳过（二者都重写帧流、互斥，CRC 优先）。
                 boolean transformDownstream = cfg.transform.enabled()
                     && clientTransformVersion >= TransformFormat.VERSION_LAYER_A
-                    && !downstreamDict;
+                    && !downstreamDict
+                    && !chunkCacheActive;
                 final int transformVersion = transformDownstream
                     ? Math.min(clientTransformVersion, Math.min(cfg.transform.maxVersion(), TransformFormat.MAX_SUPPORTED_VERSION))
                     : 0;
@@ -537,6 +588,10 @@ final class ServerProxyRuntime {
                 // B1/B2 需按 MC 协议版本选实体包表；缺表时编码端自动退化为 Layer A（仍受益于去交错）。
                 final EntityPacketTable transformTable = transformVersion >= TransformFormat.VERSION_B1
                     ? EntityPacketTable.forProtocol(clientProtocolVersion)
+                    : null;
+                // chunk_cache=measure：只读旁路埋点（不改任何字节），统计可引用缓存去重的重复流量。
+                final ChunkCacheMeasurement.Collector chunkMeasure = cfg.chunkCache == CacheMode.MEASURE
+                    ? chunkCacheMeasurement().newCollector(clientProtocolVersion)
                     : null;
 
                 final ZstdInputStream c2sDecompressor = upstreamDecompressor;
@@ -553,7 +608,7 @@ final class ServerProxyRuntime {
 
                 Future<Exception> s2c = workers.submit(() -> {
                     try {
-                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion, transformTable);
+                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion, transformTable, chunkMeasure, chunkCacheActive, cacheableTable, chunkWarm, chunkCacheVersion, chunkCacheBypassWindow, chunkCachePatch, chunkProtocolVersion);
                         return null;
                     } catch (Exception ex) {
                         return ex;
@@ -727,7 +782,7 @@ final class ServerProxyRuntime {
      * 握手改写结果：改写后的握手包 + 客户端 advertise 的 transform 版本（0 表示无） +
      * 客户端 MC 协议版本号（用于选实体包表；0 表示未知/解析失败）。
      */
-    private record HandshakeRewrite(byte[] packet, int transformVersion, int protocolVersion) {
+    private record HandshakeRewrite(byte[] packet, int transformVersion, int protocolVersion, int chunkCacheVersion) {
     }
 
     /**
@@ -736,39 +791,40 @@ final class ServerProxyRuntime {
      */
     private HandshakeRewrite rewriteLoginHandshake(byte[] handshakePayload, String sourceIp) {
         if (handshakePayload == null || handshakePayload.length == 0) {
-            return new HandshakeRewrite(handshakePayload, 0, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0, 0);
         }
 
         VarIntRead packetId = VarIntCodec.read(handshakePayload, 0, handshakePayload.length);
         if (packetId == null || packetId.value() != 0) {
-            return new HandshakeRewrite(handshakePayload, 0, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0, 0);
         }
 
         VarIntRead protocol = VarIntCodec.read(handshakePayload, packetId.next(), handshakePayload.length);
         if (protocol == null) {
-            return new HandshakeRewrite(handshakePayload, 0, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0, 0);
         }
 
         VarIntRead hostLength = VarIntCodec.read(handshakePayload, protocol.next(), handshakePayload.length);
         if (hostLength == null || hostLength.value() < 0) {
-            return new HandshakeRewrite(handshakePayload, 0, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0, 0);
         }
 
         int hostStart = hostLength.next();
         int hostEnd = hostStart + hostLength.value();
         int portEnd = hostEnd + 2;
         if (portEnd > handshakePayload.length) {
-            return new HandshakeRewrite(handshakePayload, 0, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0, 0);
         }
 
         VarIntRead nextState = VarIntCodec.read(handshakePayload, portEnd, handshakePayload.length);
         if (nextState == null || nextState.value() != 2) {
-            return new HandshakeRewrite(handshakePayload, 0, 0);
+            return new HandshakeRewrite(handshakePayload, 0, 0, 0);
         }
 
         String originalHost = new String(handshakePayload, hostStart, hostLength.value(), StandardCharsets.UTF_8);
         int transformVersion = TransformHandshake.parseVersion(originalHost);
-        String cleanedHost = TransformHandshake.strip(originalHost);
+        int chunkCacheVersion = ChunkCacheHandshake.parseVersion(originalHost);
+        String cleanedHost = ChunkCacheHandshake.strip(TransformHandshake.strip(originalHost));
         String forwardedHost = (sourceIp != null && !sourceIp.isBlank())
             ? appendForwardedIpMarker(cleanedHost, sourceIp)
             : cleanedHost;
@@ -776,7 +832,7 @@ final class ServerProxyRuntime {
         byte[] hostBytes = forwardedHost.getBytes(StandardCharsets.UTF_8);
         if (hostBytes.length > 255) {
             LOGGER.warn("[zstdnet-server] skipped forwarded handshake host rewrite for {} because host is too long: {} bytes", sourceIp, hostBytes.length);
-            return new HandshakeRewrite(handshakePayload, transformVersion, protocol.value());
+            return new HandshakeRewrite(handshakePayload, transformVersion, protocol.value(), chunkCacheVersion);
         }
 
         if (sourceIp != null && !sourceIp.isBlank()) {
@@ -789,7 +845,7 @@ final class ServerProxyRuntime {
             hostBytes,
             ByteArrayOps.slice(handshakePayload, hostEnd, handshakePayload.length)
         );
-        return new HandshakeRewrite(rebuilt, transformVersion, protocol.value());
+        return new HandshakeRewrite(rebuilt, transformVersion, protocol.value(), chunkCacheVersion);
     }
 
     private static String appendForwardedIpMarker(String originalHost, String sourceIp) {
@@ -828,6 +884,21 @@ final class ServerProxyRuntime {
         }
     }
 
+    /** 懒初始化 chunk_cache=measure 的全运行时埋点（用首次连接时的压缩配置确定假定匹配窗口）。 */
+    private ChunkCacheMeasurement chunkCacheMeasurement() {
+        ChunkCacheMeasurement m = chunkCacheMeasurement;
+        if (m == null) {
+            synchronized (this) {
+                m = chunkCacheMeasurement;
+                if (m == null) {
+                    m = new ChunkCacheMeasurement(cfg.compression);
+                    chunkCacheMeasurement = m;
+                }
+            }
+        }
+        return m;
+    }
+
     /**
      * Backend -> client: compress outbound traffic with zstd and apply flush/rate controls.
      */
@@ -843,16 +914,32 @@ final class ServerProxyRuntime {
         boolean useDictionary,
         boolean transform,
         int transformVersion,
-        EntityPacketTable transformTable
+        EntityPacketTable transformTable,
+        ChunkCacheMeasurement.Collector chunkMeasure,
+        boolean chunkCache,
+        CacheablePacketTable cacheableTable,
+        Set<Hash128> chunkWarm,
+        int chunkCacheVersion,
+        int chunkCacheBypassWindow,
+        boolean chunkCachePatch,
+        int chunkProtocolVersion
     ) throws IOException {
         OutputStream limitedDst = new RateLimitedOutputStream(dst, perConnLimiter, globalLimiter);
         DictionarySampler sampler = this.dictionarySampler;
         DictionarySampler.Collector sampleCollector = sampler != null ? sampler.newCollector() : null;
         ZstdOutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary);
-        // 变换层位于 ZSTD 之前：开启时把后端字节去交错后再喂给 zstdOut。关闭时 sink 即 zstdOut，行为与历史一致。
+        // 变换层 / CRC 层位于 ZSTD 之前。三者互斥（CRC 优先于实体变换）：
+        //   chunkCache → 区块引用缓存（相同区块发 REF 令牌）；transform → 实体包去交错；都不开 → sink 即 zstdOut，行为与历史一致。
         // 关闭 sink 会级联落定剩余帧并关闭 zstdOut；跨 block 列匹配依赖 zstdOut 的连续帧（见 ZstdStreams）。
-        // transformTable 非空（B1/B2）→ 按帧去交错；为空（仅 Layer A 或缺协议表）→ TransformingOutputStream 自动退化。
-        OutputStream sink = transform ? new TransformingOutputStream(zstdOut, transformVersion, transformTable) : zstdOut;
+        OutputStream sink;
+        if (chunkCache) {
+            sink = new CacheTransformingOutputStream(zstdOut, cacheableTable, ChunkCacheFormat.DEFAULT_CACHE_BYTES,
+                chunkWarm, chunkCacheVersion, chunkCacheBypassWindow, chunkCachePatch, chunkProtocolVersion);
+        } else if (transform) {
+            sink = new TransformingOutputStream(zstdOut, transformVersion, transformTable);
+        } else {
+            sink = zstdOut;
+        }
         try (sink) {
             InputStream srcIn = src.getInputStream();
             byte[] buf = new byte[16 * 1024];
@@ -904,6 +991,9 @@ final class ServerProxyRuntime {
                     if (sampleCollector != null) {
                         sampleCollector.accept(buf, 0, n);
                     }
+                    if (chunkMeasure != null) {
+                        chunkMeasure.accept(buf, 0, n);
+                    }
                     sink.write(buf, 0, n);
                     hasPending = true;
                     if (flushIntervalNs == 0L || (System.nanoTime() - lastFlushNs) >= flushIntervalNs) {
@@ -916,6 +1006,9 @@ final class ServerProxyRuntime {
                 src.setSoTimeout(originalTimeout);
                 if (sampleCollector != null) {
                     sampleCollector.finish();
+                }
+                if (chunkMeasure != null) {
+                    chunkMeasure.finish();
                 }
             }
 
@@ -1365,6 +1458,7 @@ final class ServerProxyRuntime {
         Set<String> trustedProxyIps = parseTrustedProxyIps(props.getProperty("trusted_proxy_ips", DEFAULT_TRUSTED_PROXY_IPS));
         CompressionOptions compression = loadCompressionOptions(props, path);
         TransformOptions transform = loadTransformOptions(props);
+        CacheMode chunkCache = CacheMode.parse(props.getProperty("chunk_cache", "auto"));
         setupDictionaryTooling(props, path);
         if (flushInterval.isNegative()) {
             flushInterval = Duration.ZERO;
@@ -1406,7 +1500,8 @@ final class ServerProxyRuntime {
             compression,
             voiceTransport,
             extraUdpPorts,
-            transform
+            transform,
+            chunkCache
         );
     }
 
@@ -2231,7 +2326,8 @@ final class ServerProxyRuntime {
         CompressionOptions compression,
         String voiceTransport,
         String extraUdpPorts,
-        TransformOptions transform
+        TransformOptions transform,
+        CacheMode chunkCache
     ) {
         private ProxyConfig withTarget(HostPort newTarget) {
             return new ProxyConfig(
@@ -2258,7 +2354,8 @@ final class ServerProxyRuntime {
                 compression,
                 voiceTransport,
                 extraUdpPorts,
-                transform
+                transform,
+                chunkCache
             );
         }
 
@@ -2287,7 +2384,8 @@ final class ServerProxyRuntime {
                 newCompression,
                 voiceTransport,
                 extraUdpPorts,
-                transform
+                transform,
+                chunkCache
             );
         }
 
@@ -2316,7 +2414,8 @@ final class ServerProxyRuntime {
                 compression,
                 voiceTransport,
                 extraUdpPorts,
-                transform
+                transform,
+                chunkCache
             );
         }
 
@@ -2353,7 +2452,8 @@ final class ServerProxyRuntime {
                 compression,
                 voiceTransport,
                 extraUdpPorts,
-                transform
+                transform,
+                chunkCache
             );
         }
 

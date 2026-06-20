@@ -25,6 +25,7 @@
   "zstdnet.hud.client.wire": "Wire Up %s | Down %s",
   "zstdnet.hud.client.raw": "Raw Up %s | Down %s",
   "zstdnet.hud.total_ratio": "Total %s / %s | Ratio %s",
+  "zstdnet.hud.client.cache": "Cache REF %s WARM %s PATCH %s | saved %s",
   "zstdnet.hud.connections": "Conns %s",
   "zstdnet.hud.mode.dedicated": "Dedicated",
   "zstdnet.hud.mode.lan": "LAN",
