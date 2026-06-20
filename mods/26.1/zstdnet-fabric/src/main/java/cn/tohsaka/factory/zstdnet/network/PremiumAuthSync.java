@@ -25,8 +25,11 @@ import cn.tohsaka.factory.zstdnet.auth.PremiumAuthProtocol;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthState;
 import cn.tohsaka.factory.zstdnet.coremod.ServerRealIpHooks;
 import cn.tohsaka.factory.zstdnet.mixin.ServerLoginPacketListenerImplAccessor;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
+import com.mojang.authlib.properties.PropertyMap;
 import com.mojang.logging.LogUtils;
 import io.netty.buffer.Unpooled;
 import net.fabricmc.api.EnvType;
@@ -116,14 +119,23 @@ public final class PremiumAuthSync {
                 String serverId = PremiumAuthProtocol.serverIdFromNonce(nonce);
                 String clientIp = PremiumAuthState.passRealIp() ? clientIp(handler) : null;
                 synchronizer.waitFor(CompletableFuture.runAsync(() -> {
-                    VerifiedProfile profile = MojangPremiumVerifier.verify(
-                        PremiumAuthState.sessionBaseUrl(), username, serverId, clientIp,
-                        MojangPremiumVerifier.defaultFetcher());
-                    if (profile != null) {
-                        ((ServerLoginPacketListenerImplAccessor) handler).zstdnet$setGameProfile(buildProfile(profile));
-                        LOGGER.info("[zstdnet-server] verified premium player {} -> {}", username, profile.id());
-                    } else {
-                        applyPolicyOnFailure(handler, "session server did not confirm " + username);
+                    try {
+                        VerifiedProfile profile = MojangPremiumVerifier.verify(
+                            PremiumAuthState.sessionBaseUrl(), username, serverId, clientIp,
+                            MojangPremiumVerifier.defaultFetcher());
+                        if (profile != null) {
+                            ((ServerLoginPacketListenerImplAccessor) handler).zstdnet$setGameProfile(buildProfile(profile));
+                            LOGGER.info("[zstdnet-server] verified premium player {} -> {}", username, profile.id());
+                        } else {
+                            applyPolicyOnFailure(handler, "session server did not confirm " + username);
+                        }
+                    } catch (Throwable t) {
+                        // 关键：fabric 登录 addon 的 queryTick() 会把本 future 的异常收集后【静默丢弃】，
+                        // 既不记日志也不断开 —— 玩家会以离线 UUID 进服（数据/背包丢失且无任何线索）。
+                        // 故必须在此自行记录，否则任何验证期异常都将成为「无声的数据丢失」。
+                        LOGGER.error("[zstdnet-server] premium verification failed for {} (falling back to offline identity; player data may differ): {}",
+                            username, t.toString(), t);
+                        applyPolicyOnFailure(handler, "verification error: " + t);
                     }
                 }, EXECUTOR));
             });
@@ -170,12 +182,17 @@ public final class PremiumAuthSync {
     }
 
     private static GameProfile buildProfile(VerifiedProfile profile) {
-        GameProfile gameProfile = new GameProfile(profile.id(), profile.name());
+        // authlib 7.x（MC 26.1）的 GameProfile 是 record，其 PropertyMap 恒为不可变
+        // （PropertyMap 构造即 ImmutableMultimap.copyOf，连两参 new GameProfile(id,name) 用的 PropertyMap.EMPTY 也不可变）。
+        // 旧版的 new GameProfile(id,name) + properties().put(...) 会抛 UnsupportedOperationException，
+        // 致登录档案替换失败、玩家落回离线 UUID（背包/人物数据丢失）。
+        // 故先填一个可变 Multimap，再用三参构造一次性建好不可变档案。
+        Multimap<String, Property> properties = ArrayListMultimap.create();
         for (MojangPremiumVerifier.Property property : profile.properties()) {
-            gameProfile.properties().put(property.name(),
+            properties.put(property.name(),
                 new Property(property.name(), property.value(), property.signature()));
         }
-        return gameProfile;
+        return new GameProfile(profile.id(), profile.name(), new PropertyMap(properties));
     }
 
     private static String profileName(ServerLoginPacketListenerImpl handler) {

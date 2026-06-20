@@ -99,9 +99,13 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
 | 登录档案字段 | `gameProfile` | `authenticatedProfile` | `authenticatedProfile` |
 | `joinServer(...)` | `(GameProfile, token, serverId)` | `(UUID, token, serverId)` | `(UUID, token, serverId)` |
 | GameProfile | 类，`getName()/getProperties()` | 类，`getName()/getProperties()` | **record**，`name()/properties()/id()` |
+| `PropertyMap` 可变性 | **可变**（内部 `LinkedHashMultimap`） | **可变**（同左） | **不可变**（构造即 `ImmutableMultimap.copyOf`，连 `PropertyMap.EMPTY` 也是） |
+| 构造带皮肤的正版档案 | `new GameProfile(id,name)` + `getProperties().put(...)` | 同左 | **必须** `new GameProfile(id, name, new PropertyMap(可变Multimap))`（三参 record 构造）；旧 `properties().put(...)` 写法会抛 `UnsupportedOperationException` |
 | 客户端取会话服 | `Minecraft.getMinecraftSessionService()` | `Minecraft.getMinecraftSessionService()` | `Minecraft.services().sessionService()` |
 | `ResourceLocation` | `new ResourceLocation(ns,path)` | `ResourceLocation.fromNamespaceAndPath` | **改名 `Identifier`**，`Identifier.fromNamespaceAndPath` |
 | `User` 取 UUID | `getProfileId()` | `getProfileId()` | `getProfileId()` |
+
+> **★26.1 实测踩坑（2026-06-20，已修）**：`buildProfile` 在 26.1 用旧的 `new GameProfile(id,name)` + `properties().put(...)` 会抛 `UnsupportedOperationException`（authlib 7.x 的 `PropertyMap` 恒不可变），导致 `setGameProfile` 没执行、正版玩家**落回离线 UUID → 背包/人物数据丢失**。更隐蔽的是 **fabric 的 `ServerLoginNetworkAddon.queryTick()` 会把 `synchronizer.waitFor` future 的异常静默丢弃**（不记日志不断开），故现象是「验证已启用、玩家进服、但无任何 premium 日志、数据却丢」。修复：两个 26.1 变体的 `buildProfile` 改三参构造；并给 fabric 应答 handler 套 `try/catch + LOGGER.error` 防无声失败。1.20.1/1.21.1 的 `PropertyMap` 可变不受影响。
 
 > Forge/NeoForge 同样会撞 Mohist 自带 zstd-jni 的 JPMS 问题（见 `mohist-zstd-relocation` 记忆），与本功能无关，按既有计划处理。
 

@@ -23,8 +23,11 @@ import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier;
 import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier.VerifiedProfile;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthProtocol;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthState;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
+import com.mojang.authlib.properties.PropertyMap;
 import com.mojang.logging.LogUtils;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
@@ -184,12 +187,16 @@ public final class PremiumAuthServerHooks {
     }
 
     private static GameProfile buildProfile(VerifiedProfile profile) {
-        GameProfile gameProfile = new GameProfile(profile.id(), profile.name());
+        // authlib 7.x（MC 26.1）的 GameProfile 是 record，其 PropertyMap 恒为不可变
+        // （PropertyMap 构造即 ImmutableMultimap.copyOf）。旧版的 new GameProfile(id,name) + properties().put(...)
+        // 会抛 UnsupportedOperationException，致登录档案替换失败、玩家落回离线 UUID（背包/人物数据丢失）。
+        // 故先填一个可变 Multimap，再用三参构造一次性建好不可变档案。
+        Multimap<String, Property> properties = ArrayListMultimap.create();
         for (MojangPremiumVerifier.Property property : profile.properties()) {
-            gameProfile.properties().put(property.name(),
+            properties.put(property.name(),
                 new Property(property.name(), property.value(), property.signature()));
         }
-        return gameProfile;
+        return new GameProfile(profile.id(), profile.name(), new PropertyMap(properties));
     }
 
     private static String usernameOf(ServerLoginPacketListenerImpl listener) {
