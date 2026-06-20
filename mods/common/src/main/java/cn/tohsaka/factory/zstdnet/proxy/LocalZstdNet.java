@@ -467,7 +467,7 @@ public final class LocalZstdNet {
             );
 
             // 跨会话持久化（v2）：打开本服务器的磁盘缓存，取本会话 warm 快照。其键集就是要发给服务端的 manifest，
-            // 也是 WARM_REF 重放的来源。持久化关闭时为 null/空——仍 advertise + 发空 manifest（服务端按 advertise 版本确定读取）。
+            // 也是 WARM_REF 重放的来源。持久化关闭 / 首连无缓存时为空——此时不发 manifest（见下方写出处的线兼容说明）。
             final ChunkCacheStore cacheStore = (clientCacheEnabled && clientCachePersist)
                 ? ChunkCacheStore.open(remoteHost, remotePort, clientCachePersistBytes)
                 : null;
@@ -482,8 +482,14 @@ public final class LocalZstdNet {
                 )) {
                     OutputStream countedRawOut = new CountingOutputStream(zstdOut, stats::addClientToServerRaw);
                     PacketIo.writePacket(countedRawOut, firstPacket);
-                    // advertise 了 ccache（>=v2）就紧跟一个 ZNCM manifest 帧（即便空）——服务端据 advertise 版本恰好读一帧。
-                    if (clientCacheEnabled) {
+                    // 跨会话 manifest：仅当本会话确有可声明的持久区块（warm 非空）时才在握手后插一帧 ZNCM。
+                    // 线兼容关键不变量：warm 非空 ⟺ 之前曾对“这台服务器”成功跑过 CRC（解码端只在解 ZNCR 的 FULL/PATCH
+                    // 时写穿透落盘），故对端必是会 consume manifest 的当前版服务端 → 安全。warm 为空（首连 / 未升级或不支持
+                    // 的服务端 / 持久化关闭）时绝不发：空 manifest 零收益，却会被尚未实现 consume 的旧版服务端当作 login-start
+                    // 转发给后端而断登录。缺帧时当前版服务端的自纠错路径会把下一帧当 login-start 转发，连接照常。
+                    if (clientCacheEnabled
+                        && ChunkCacheFormat.MAX_SUPPORTED_VERSION >= ChunkCacheFormat.VERSION_MANIFEST
+                        && !warmSnapshot.isEmpty()) {
                         PacketIo.writePacket(countedRawOut, ChunkManifest.encode(warmSnapshot.keySet()));
                     }
                     countedRawOut.flush();

@@ -45,6 +45,9 @@ public final class ClientConfig {
     private static volatile int level = ClientCompressionConfig.DEFAULT_LEVEL;
     private static volatile CompressionOptions compression = CompressionOptions.none();
     private static volatile TransformOptions transform = TransformOptions.disabled();
+    private static volatile boolean cacheEnabled = true;
+    private static volatile boolean cachePersist = true;
+    private static volatile long cachePersistBytes = 0L;
     private static volatile boolean initialized;
 
     private ClientConfig() {
@@ -62,6 +65,9 @@ public final class ClientConfig {
             level = parsed.level();
             compression = parsed.compression();
             transform = parsed.transform();
+            cacheEnabled = parsed.cacheEnabled();
+            cachePersist = parsed.cachePersist();
+            cachePersistBytes = parsed.cachePersistBytes();
             initialized = true;
         }
     }
@@ -87,8 +93,29 @@ public final class ClientConfig {
         return transform;
     }
 
+    public static boolean cacheEnabled() {
+        if (!initialized) {
+            init();
+        }
+        return cacheEnabled;
+    }
+
+    public static boolean cachePersist() {
+        if (!initialized) {
+            init();
+        }
+        return cachePersist;
+    }
+
+    public static long cachePersistBytes() {
+        if (!initialized) {
+            init();
+        }
+        return cachePersistBytes;
+    }
+
     private static ClientCompressionConfig.Parsed loadOrCreate() {
-        ClientCompressionConfig.Parsed fallback = new ClientCompressionConfig.Parsed(ClientCompressionConfig.DEFAULT_LEVEL, CompressionOptions.none(), TransformOptions.disabled());
+        ClientCompressionConfig.Parsed fallback = new ClientCompressionConfig.Parsed(ClientCompressionConfig.DEFAULT_LEVEL, CompressionOptions.none(), TransformOptions.disabled(), true, true, 0L);
         try {
             Files.createDirectories(PATH.getParent());
             if (!Files.exists(PATH)) {

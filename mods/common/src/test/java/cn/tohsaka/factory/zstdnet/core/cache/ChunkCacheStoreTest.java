@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet.core.cache;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -39,6 +40,12 @@ class ChunkCacheStoreTest {
 
     private static final long BIG = 64L * 1024 * 1024;
 
+    /** 落盘是异步的：在 JUnit 删除 @TempDir 前先等后台 I/O 落定，避免“并发写 vs 删目录”的清理竞态。 */
+    @AfterEach
+    void flushPersistence() {
+        ChunkCacheStore.awaitPersistence();
+    }
+
     @Test
     void putThenSnapshotAndReopenLoads(@TempDir Path dir) {
         byte[] a = frame(1, 2000);
@@ -54,7 +61,8 @@ class ChunkCacheStoreTest {
         assertArrayEquals(a, warm.get(ka));
         assertArrayEquals(b, warm.get(kb));
 
-        // 重开（模拟重连）：从磁盘加载、完整性校验通过。
+        // 重开（模拟重连）：从磁盘加载、完整性校验通过。落盘是异步的，先等其落定再重开。
+        ChunkCacheStore.awaitPersistence();
         ChunkCacheStore reopened = ChunkCacheStore.openAt(dir, BIG);
         Map<Hash128, byte[]> warm2 = reopened.snapshotWarm();
         assertEquals(2, warm2.size());
@@ -107,6 +115,26 @@ class ChunkCacheStoreTest {
         assertEquals(1, store.size());
         assertTrue(store.snapshotWarm().containsKey(kb), "newest entry survives eviction");
         assertFalse(store.snapshotWarm().containsKey(ka), "oldest entry evicted");
+    }
+
+    @Test
+    void touchRefreshesRecencySoHotEntrySurvivesEviction(@TempDir Path dir) {
+        byte[] a = frame(1, 4000);
+        byte[] b = frame(2, 4000);
+        byte[] c = frame(3, 4000);
+        Hash128 ka = Hashing.content128(a);
+        Hash128 kb = Hashing.content128(b);
+        Hash128 kc = Hashing.content128(c);
+        long twoFit = 2L * (4000 + 64) + 64; // 容得下 2 个、容不下 3 个
+        ChunkCacheStore store = ChunkCacheStore.openAt(dir, twoFit);
+        store.put(ka, a);
+        store.put(kb, b); // 此刻插入序：a(最旧) → b
+        store.touch(ka);  // a 升为最近 → 序：b(最旧) → a
+        store.put(kc, c); // 超预算 → 逐出最旧 = b（而非 a）
+        assertEquals(2, store.size());
+        assertTrue(store.snapshotWarm().containsKey(ka), "touched (hot) entry must survive");
+        assertTrue(store.snapshotWarm().containsKey(kc), "newest entry survives");
+        assertFalse(store.snapshotWarm().containsKey(kb), "untouched older entry is evicted");
     }
 
     // ---- helpers ----

@@ -153,6 +153,8 @@ final class ServerProxyRuntime {
     private volatile DictionarySampler dictionarySampler;
     /** chunk_cache=measure 模式的只读埋点（懒初始化，全运行时一份，跨连接累计跨会话重复统计）。 */
     private volatile ChunkCacheMeasurement chunkCacheMeasurement;
+    /** 已对“启用 chunk_cache 但该协议无可缓存包表”告警过的协议版本集（每版本仅刷一次，避免刷屏）。 */
+    private final Set<Integer> chunkCacheUnsupportedWarned = ConcurrentHashMap.newKeySet();
     /** dictionary_auto 模式的后台「采样够了就训练」轮询器。 */
     private ScheduledExecutorService autoDictWatcher;
     /**
@@ -561,6 +563,14 @@ final class ServerProxyRuntime {
                         ? CacheablePacketTable.forProtocol(clientProtocolVersion)
                         : null;
                 final boolean chunkCacheActive = cacheableTable != null && !cacheableTable.isEmpty();
+                // 启用了 chunk_cache、客户端也 advertise，但本协议没有可缓存包表（如 1.18.2 / 26.1）→ 该连接是 no-op。
+                // 字节仍逐字节一致、绝不损坏，但运营者应知道这些客户端拿不到收益，故每协议告警一次。
+                if (cfg.chunkCache.engagesCache() && clientChunkCacheVersion >= ChunkCacheFormat.VERSION_REF
+                    && !downstreamDict && !chunkCacheActive
+                    && chunkCacheUnsupportedWarned.add(clientProtocolVersion)) {
+                    LOGGER.warn("[chunk_cache] enabled (mode={}) but no cacheable-packet table for MC protocol {} -> chunk cache is a NO-OP for these clients (bytes stay identical). Covered protocols: 758/760/763/767.",
+                        cfg.chunkCache.configValue(), clientProtocolVersion);
+                }
                 // 协商出的生效 CRC 版本（写入 s2c PREAMBLE；>=2 才发 WARM_REF）。warm 集合仅在 v2 生效时携带。
                 final int chunkCacheVersion = chunkCacheActive
                     ? Math.min(clientChunkCacheVersion, ChunkCacheFormat.MAX_SUPPORTED_VERSION)
@@ -831,8 +841,15 @@ final class ServerProxyRuntime {
 
         byte[] hostBytes = forwardedHost.getBytes(StandardCharsets.UTF_8);
         if (hostBytes.length > 255) {
-            LOGGER.warn("[zstdnet-server] skipped forwarded handshake host rewrite for {} because host is too long: {} bytes", sourceIp, hostBytes.length);
-            return new HandshakeRewrite(handshakePayload, transformVersion, protocol.value(), chunkCacheVersion);
+            // 多半是 real-ip 标记把 host 顶过 255。退回不带 real-ip、但仍剥净 zstdnet-* 标记的 cleanedHost 再改写，
+            // 避免把 ccache/xform/real-ip 标记泄漏给后端。仅当连 cleanedHost 都超长（异常 host）才彻底放弃改写。
+            byte[] cleanedBytes = cleanedHost.getBytes(StandardCharsets.UTF_8);
+            if (cleanedBytes.length > 255) {
+                LOGGER.warn("[zstdnet-server] skipped forwarded handshake host rewrite for {} because host is too long even after stripping markers: {} bytes", sourceIp, cleanedBytes.length);
+                return new HandshakeRewrite(handshakePayload, transformVersion, protocol.value(), chunkCacheVersion);
+            }
+            LOGGER.warn("[zstdnet-server] forwarded handshake host too long ({} bytes) for {}; dropping real-ip marker but keeping zstdnet markers stripped", hostBytes.length, sourceIp);
+            hostBytes = cleanedBytes;
         }
 
         if (sourceIp != null && !sourceIp.isBlank()) {

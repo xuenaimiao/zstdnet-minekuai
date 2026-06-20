@@ -39,8 +39,18 @@ public final class ClientCompressionConfig {
     private ClientCompressionConfig() {
     }
 
-    /** 解析结果：客户端 level、附加压缩参数与实体包流变换偏好。 */
-    public record Parsed(int level, CompressionOptions compression, TransformOptions transform) {
+    /** 跨会话持久缓存的默认预算（MiB）。0/负 → 由 {@code LocalZstdNet} 用内置默认（64 MiB）。 */
+    public static final int DEFAULT_CACHE_PERSIST_MB = 64;
+
+    /**
+     * 解析结果：客户端 level、附加压缩参数、实体包流变换偏好，以及区块引用缓存（CRC）偏好。
+     *
+     * @param cacheEnabled      是否启用 CRC（advertise + 安装逆向包装；仅服务端也启用时才真正生效）
+     * @param cachePersist      是否跨会话落盘持久化（关掉则仅会话内 REF）
+     * @param cachePersistBytes 持久缓存字节预算（{@code <=0} 表示用内置默认）
+     */
+    public record Parsed(int level, CompressionOptions compression, TransformOptions transform,
+                         boolean cacheEnabled, boolean cachePersist, long cachePersistBytes) {
     }
 
     /**
@@ -75,7 +85,12 @@ public final class ClientCompressionConfig {
         TransformOptions transform = transformOn
             ? TransformOptions.enabled(TransformFormat.MAX_SUPPORTED_VERSION, 0)
             : TransformOptions.disabled();
-        return new Parsed(level, compression, transform);
+
+        boolean cacheEnabled = Boolean.parseBoolean(trimmed(props, "chunk_cache", "true"));
+        boolean cachePersist = Boolean.parseBoolean(trimmed(props, "chunk_cache_persist", "true"));
+        int persistMb = parseInt(props.getProperty("chunk_cache_persist_mb"), DEFAULT_CACHE_PERSIST_MB);
+        long cachePersistBytes = persistMb > 0 ? (long) persistMb * 1024 * 1024 : 0L;
+        return new Parsed(level, compression, transform, cacheEnabled, cachePersist, cachePersistBytes);
     }
 
     /** 首次生成 {@code zstdnet-client.toml} 时写入的带注释模板。 */
@@ -101,7 +116,17 @@ public final class ClientCompressionConfig {
             # for much better ratio in entity-heavy scenes. Only takes effect if the SERVER also enables
             # it; safe and byte-identical against servers that don't (auto passthrough). Default off.
             transform=false
-            """.formatted(DEFAULT_LEVEL);
+
+            # Chunk reference cache (CRC): de-duplicates repeated chunk data before zstd (8-byte REF tokens
+            # for chunks you already hold). Only takes effect if the SERVER also enables it (chunk_cache=
+            # auto/ref/full); safe and byte-identical against servers that don't. Default on.
+            chunk_cache=true
+            # Persist full chunks to disk (config/zstdnet-cache/<server>/) so reconnecting can replay
+            # already-held chunks (WARM_REF) across sessions. Off = in-session de-dup only. Default on.
+            chunk_cache_persist=true
+            # Disk+memory budget for the cross-session cache, in MiB (per server). Default %d.
+            chunk_cache_persist_mb=%d
+            """.formatted(DEFAULT_LEVEL, DEFAULT_CACHE_PERSIST_MB, DEFAULT_CACHE_PERSIST_MB);
     }
 
     private static String trimmed(Properties props, String key, String fallback) {

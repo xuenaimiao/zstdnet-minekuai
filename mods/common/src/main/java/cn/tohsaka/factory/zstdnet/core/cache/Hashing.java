@@ -39,9 +39,11 @@ package cn.tohsaka.factory.zstdnet.core.cache;
 public final class Hashing {
     private static final long FNV_OFFSET = 0xcbf29ce484222325L;
     private static final long FNV_PRIME = 0x100000001b3L;
-    // 第二路（lo 半）独立的基/质数：与第一路不同 → 两路近似独立 → 拼成约 128 位强度。
+    // 第二路（lo 半）：基、乘子、混合结构、finalizer 全部独立于第一路与 fmix64 常量，使两路近似独立 →
+    // 拼成接近真 128 位强度（WARM_REF 跨会话两端无法字节比对、只能信任“同 hash ⟹ 同字节”，故须强抗碰撞）。
+    // 加固历史：旧实现的 lo 路质数恰好等于 fmix64 的 murmur 常量（0xff51afd7ed558ccd），两路高度相关，已弃用。
     private static final long FNV_OFFSET_2 = 0x9e3779b97f4a7c15L;
-    private static final long FNV_PRIME_2 = 0xff51afd7ed558ccdL;
+    private static final long LANE2_MUL = 0xd6e8feb86659fd93L;
 
     private Hashing() {
     }
@@ -72,12 +74,14 @@ public final class Hashing {
         int end = off + len;
         for (int i = off; i < end; i++) {
             long b = data[i] & 0xFFL;
+            // lane 1：与 content64 逐位一致 → hi 半即会话内 8 字节令牌。
             h1 ^= b;
             h1 *= FNV_PRIME;
-            h2 ^= b;
-            h2 *= FNV_PRIME_2;
+            // lane 2：结构与 lane 1 不同（异或→乘→旋转混合），常量也无关 → 两路近似独立。
+            h2 = (h2 ^ b) * LANE2_MUL;
+            h2 ^= Long.rotateLeft(h2, 31);
         }
-        return new Hash128(fmix64(h1), fmix64(h2));
+        return new Hash128(fmix64(h1), fmixLo(h2));
     }
 
     /** 对整个数组计算 128 位内容哈希。 */
@@ -85,13 +89,23 @@ public final class Hashing {
         return content128(data, 0, data.length);
     }
 
-    /** murmur3 64 位 finalizer：FNV-1a 雪崩偏弱，这步把比特充分扩散开。 */
+    /** murmur3 64 位 finalizer（lane 1 / content64 专用）：FNV-1a 雪崩偏弱，这步把比特充分扩散开。 */
     private static long fmix64(long h) {
         h ^= h >>> 33;
         h *= 0xff51afd7ed558ccdL;
         h ^= h >>> 33;
         h *= 0xc4ceb9fe1a85ec53L;
         h ^= h >>> 33;
+        return h;
+    }
+
+    /** splitmix64 finalizer（lane 2 / lo 半专用）：常量与 {@link #fmix64} 完全不同，保证两路独立。 */
+    private static long fmixLo(long h) {
+        h ^= h >>> 30;
+        h *= 0xbf58476d1ce4e5b9L;
+        h ^= h >>> 27;
+        h *= 0x94d049bb133111ebL;
+        h ^= h >>> 31;
         return h;
     }
 }

@@ -30,6 +30,7 @@ class CacheablePacketTableTest {
 
     @Test
     void knownProtocolsExposeFullChunkId() {
+        assertTrue(CacheablePacketTable.forProtocol(758).isFullChunk(0x22)); // 1.18.2
         assertTrue(CacheablePacketTable.forProtocol(760).isFullChunk(0x21)); // 1.19.2
         assertTrue(CacheablePacketTable.forProtocol(763).isFullChunk(0x24)); // 1.20.1
         assertTrue(CacheablePacketTable.forProtocol(767).isFullChunk(0x27)); // 1.21.1
@@ -47,7 +48,7 @@ class CacheablePacketTableTest {
     @Test
     void unknownProtocolReturnsNull() {
         assertNull(CacheablePacketTable.forProtocol(404));
-        assertNull(CacheablePacketTable.forProtocol(758)); // 1.18.2 暂未覆盖
+        assertNull(CacheablePacketTable.forProtocol(759)); // 1.19 暂未覆盖
     }
 
     @Test

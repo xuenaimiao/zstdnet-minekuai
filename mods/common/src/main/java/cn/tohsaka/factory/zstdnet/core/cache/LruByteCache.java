@@ -50,7 +50,12 @@ final class LruByteCache {
         }
     }
 
-    /** 每条目除载荷外的近似固定开销（key + 链表指针 + map 桶），计入预算更接近真实内存。 */
+    /**
+     * 每条目除载荷外的近似固定开销（key + 链表指针 + map 桶），计入预算更接近真实内存。
+     * <p><b>锁步契约：</b>此值连同 {@link ChunkCacheFormat#DEFAULT_CACHE_BYTES} 决定逐出点，编/解码两端必须逐位一致。
+     * 改动二者任一<b>必须同时抬升 {@link ChunkCacheFormat#MAX_SUPPORTED_VERSION}</b>（否则混合 release 的两端逐出点
+     * 不同 → 会话内 REF/PATCH 基线 miss → fail-closed 反复断连）。
+     */
     private static final int ENTRY_OVERHEAD = 64;
 
     private final Map<Long, Node> map = new HashMap<>();

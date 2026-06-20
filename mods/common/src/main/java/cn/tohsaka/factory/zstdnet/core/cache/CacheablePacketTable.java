@@ -65,8 +65,7 @@ public final class CacheablePacketTable {
     /**
      * 返回该协议版本的可缓存包表；未覆盖的版本返回 {@code null}。
      *
-     * <p>已覆盖：760=1.19.2、763=1.20.1、767=1.21.1（与 {@link cn.tohsaka.factory.zstdnet.core.transform.EntityPacketTable}
-     * 覆盖的版本一致）。packetId 为各版本 clientbound PLAY 全区块包编号，经 PrismarineJS minecraft-data /
+     * <p>已覆盖：758=1.18.2、760=1.19.2、763=1.20.1、767=1.21.1。packetId 为各版本 clientbound PLAY 全区块包编号，经 PrismarineJS minecraft-data /
      * wiki.vg 交叉核对；仅影响“按 id 归类”统计（见类注释的安全性质）。
      */
     public static synchronized CacheablePacketTable forProtocol(int protocol) {
@@ -80,6 +79,8 @@ public final class CacheablePacketTable {
 
     private static CacheablePacketTable build(int protocol) {
         switch (protocol) {
+            case 758: // Minecraft 1.18.2（clientbound PLAY "Chunk Data and Update Light"）
+                return ofFullChunkIds(0x22);
             case 760: // Minecraft 1.19.2
                 return ofFullChunkIds(0x21);
             case 763: // Minecraft 1.20.1

@@ -216,6 +216,9 @@ public final class ChunkCacheCodec {
                 if (frame == null) {
                     throw new IOException("zstdnet chunk-cache: WARM_REF to missing persisted baseline " + hash);
                 }
+                if (store != null) {
+                    store.touch(hash); // 刷新跨会话近用度（D4-LRU），仅影响缓存有效性、不影响正确性
+                }
                 sink.write(frame, 0, frame.length);
                 return pos + ChunkCacheFormat.HASH128_BYTES - start;
             }

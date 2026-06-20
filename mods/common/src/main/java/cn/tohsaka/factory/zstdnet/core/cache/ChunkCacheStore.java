@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -35,6 +36,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
@@ -58,6 +63,23 @@ public final class ChunkCacheStore {
 
     /** 进程内按目录复用：同一 MC 会话内多次连同一服务器只读盘一次。 */
     private static final ConcurrentHashMap<String, ChunkCacheStore> OPEN = new ConcurrentHashMap<>();
+
+    /**
+     * 共享后台持久化线程：把磁盘 I/O（写穿透 + 逐出删文件 + touch mtime）移出客户端 s2c 投递线程——解码端每个
+     * FULL/PATCH 都会 {@link #put}，冷缓存加入/传送时近乎每块都是 FULL，内联同步盘写会拖慢包投递。单线程 + FIFO +
+     * 有界队列 + 最低优先级；内存状态在 {@link #put} 里同步更新（snapshot 即时一致），磁盘最终一致。队列满则丢弃该次
+     * I/O（{@link ThreadPoolExecutor.DiscardPolicy}）：best-effort 持久化，丢失只是下次会话少一个 WARM 候选，绝不影响正确性。
+     */
+    private static final LinkedBlockingQueue<Runnable> IO_QUEUE = new LinkedBlockingQueue<>(8192);
+    private static final ExecutorService IO_EXEC = new ThreadPoolExecutor(
+        1, 1, 60L, TimeUnit.SECONDS, IO_QUEUE,
+        r -> {
+            Thread t = new Thread(r, "zstdnet-chunk-cache-io");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        },
+        new ThreadPoolExecutor.DiscardPolicy());
 
     private final Path dir;
     private final long maxBytes;
@@ -91,19 +113,37 @@ public final class ChunkCacheStore {
     }
 
     /**
-     * 写入一个整发帧（key 须为 {@code content128(frame)}）。已存在则忽略（幂等）。写盘用临时文件 + 原子改名；
-     * 随后按预算淘汰最久未写条目（删文件）。任一磁盘异常只记日志、不抛——持久化是尽力而为，失败不影响连接。
+     * 写入一个整发帧（key 须为 {@code content128(frame)}）。已存在则忽略（幂等）。内存集合<b>同步</b>更新（snapshot/逐出
+     * 即时一致），磁盘写穿透 + 逐出删文件<b>异步</b>交给后台线程（移出调用方的 s2c 读线程，见 {@link #IO_EXEC}）。
+     * 磁盘写失败只记日志、不回滚内存：本会话 warm 快照在会话开始时已定格、不受影响；下次会话 load 不到该条只是一次 miss，
+     * 绝不以错字节服务（content128 内容寻址 + load 时复算校验兜底）。
      */
     public synchronized void put(Hash128 key, byte[] frame) {
         if (entries.containsKey(key)) {
             return;
         }
-        if (!writeFile(key, frame)) {
-            return; // 落盘失败：不计入内存集合，保持磁盘/内存一致
-        }
         entries.put(key, frame);
         curBytes += (long) frame.length + ENTRY_OVERHEAD;
-        evictToBudget();
+        List<Hash128> evicted = evictToBudgetCollect();
+        submitIo(() -> {
+            writeFile(key, frame);
+            for (Hash128 v : evicted) {
+                deleteQuietly(dir.resolve(v.toHex() + SUFFIX));
+            }
+        });
+    }
+
+    /**
+     * WARM_REF 命中时刷新该条目的近用度，避免被反复引用的“热块”先于冷块被预算逐出，并使下次会话的 load 顺序
+     * （按文件 mtime）把热块视作最近。仅影响缓存有效性、不影响正确性。
+     */
+    public synchronized void touch(Hash128 key) {
+        byte[] v = entries.remove(key);
+        if (v == null) {
+            return; // 不在本进程内存集合（可能已逐出）——无须刷新
+        }
+        entries.put(key, v); // 重新插入 = 移到 LinkedHashMap 末尾（最近端），逐出从头部（最久）开始
+        submitIo(() -> touchFileMtime(dir.resolve(key.toHex() + SUFFIX)));
     }
 
     public synchronized int size() {
@@ -157,7 +197,9 @@ public final class ChunkCacheStore {
             curBytes += (long) data.length + ENTRY_OVERHEAD;
             loaded++;
             if (curBytes > maxBytes) {
-                evictToBudget();
+                for (Hash128 v : evictToBudgetCollect()) {
+                    deleteQuietly(dir.resolve(v.toHex() + SUFFIX)); // load 在启动期，同步删盘可接受
+                }
             }
         }
         if (loaded > 0 || dropped > 0) {
@@ -184,13 +226,41 @@ public final class ChunkCacheStore {
         }
     }
 
-    private void evictToBudget() {
+    /** 按预算从内存集合淘汰最久未写条目，返回被逐出键供调用方（异步或同步）删文件。 */
+    private List<Hash128> evictToBudgetCollect() {
+        List<Hash128> victims = null;
         var it = entries.entrySet().iterator();
         while (curBytes > maxBytes && entries.size() > 1 && it.hasNext()) {
             Map.Entry<Hash128, byte[]> victim = it.next();
             it.remove();
             curBytes -= (long) victim.getValue().length + ENTRY_OVERHEAD;
-            deleteQuietly(dir.resolve(victim.getKey().toHex() + SUFFIX));
+            if (victims == null) {
+                victims = new ArrayList<>();
+            }
+            victims.add(victim.getKey());
+        }
+        return victims == null ? List.of() : victims;
+    }
+
+    private static void submitIo(Runnable task) {
+        IO_EXEC.execute(task); // 队列满时 DiscardPolicy 静默丢弃，不抛
+    }
+
+    private static void touchFileMtime(Path p) {
+        try {
+            if (Files.exists(p)) {
+                Files.setLastModifiedTime(p, FileTime.fromMillis(System.currentTimeMillis()));
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    /** 单测钩子：阻塞直到此前排队的持久化 I/O 全部完成（单线程 FIFO，故提交一个空任务并等待即可）。 */
+    static void awaitPersistence() {
+        try {
+            IO_EXEC.submit(() -> {
+            }).get();
+        } catch (Exception ignored) {
         }
     }
 

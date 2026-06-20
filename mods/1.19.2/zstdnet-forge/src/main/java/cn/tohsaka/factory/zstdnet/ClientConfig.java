@@ -40,6 +40,9 @@ public final class ClientConfig {
     private static final ForgeConfigSpec.IntValue WINDOW_LOG;
     private static final ForgeConfigSpec.ConfigValue<String> DICTIONARY;
     private static final ForgeConfigSpec.BooleanValue TRANSFORM;
+    private static final ForgeConfigSpec.BooleanValue CHUNK_CACHE;
+    private static final ForgeConfigSpec.BooleanValue CHUNK_CACHE_PERSIST;
+    private static final ForgeConfigSpec.IntValue CHUNK_CACHE_PERSIST_MB;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -59,6 +62,15 @@ public final class ClientConfig {
         TRANSFORM = builder
             .comment("Entity packet-stream transform: better ratio in entity-heavy scenes. Only active if the server enables it too; byte-identical fallback otherwise. Default off.")
             .define("transform", false);
+        CHUNK_CACHE = builder
+            .comment("Chunk reference cache: de-duplicates repeated chunk data before zstd. Only active if the server enables it too (chunk_cache=auto/ref/full); byte-identical fallback otherwise. Default on.")
+            .define("chunk_cache", true);
+        CHUNK_CACHE_PERSIST = builder
+            .comment("Persist full chunks to disk so reconnecting can replay already-held chunks (WARM_REF) across sessions. Off = in-session de-dup only. Default on.")
+            .define("chunk_cache_persist", true);
+        CHUNK_CACHE_PERSIST_MB = builder
+            .comment("Disk+memory budget for the cross-session chunk cache, in MiB (per server). Default 64.")
+            .defineInRange("chunk_cache_persist_mb", 64, 1, 4096);
 
         SPEC = builder.build();
     }
@@ -89,5 +101,17 @@ public final class ClientConfig {
         return TRANSFORM.get()
             ? TransformOptions.enabled(TransformFormat.MAX_SUPPORTED_VERSION, 0)
             : TransformOptions.disabled();
+    }
+
+    public static boolean cacheEnabled() {
+        return CHUNK_CACHE.get();
+    }
+
+    public static boolean cachePersist() {
+        return CHUNK_CACHE_PERSIST.get();
+    }
+
+    public static long cachePersistBytes() {
+        return (long) CHUNK_CACHE_PERSIST_MB.get() * 1024 * 1024;
     }
 }

@@ -107,6 +107,8 @@ public final class ChunkCacheFormat {
      * 每条连接的缓存字节预算（编码端与解码端<b>必须一致</b>，以保证 LRU 同步淘汰 → 会话内 REF 不 miss）。
      * Phase 1 取固定协议常量（两端各自编译进同一值，天然一致，无需协商）：16 MiB ≈ 容下数十~数百个区块的工作集。
      * 服务端多人场景的可配置 + 协商预算留待 Phase 2（经流首 header 下发，使客户端精确匹配服务端选定值）。
+     * <p><b>锁步契约：</b>此值连同 {@code LruByteCache.ENTRY_OVERHEAD} 决定逐出点，编/解码两端必须一致。改动其一
+     * <b>必须同时抬升 {@link #MAX_SUPPORTED_VERSION}</b>，否则混合 release 的两端逐出不同步 → REF/PATCH 基线 miss → 反复断连。
      */
     public static final long DEFAULT_CACHE_BYTES = 16L * 1024 * 1024;
 
