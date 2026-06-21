@@ -428,7 +428,7 @@ Notes:
   - Before ZSTD, replaces chunks the client already holds with 8/16-byte tokens (or byte-level deltas), stacked with ZSTD (see "[Chunk Reference Cache (CRC, on by default)](#chunk-reference-cache-crc-on-by-default)")
   - `auto` (default, recommended) / `ref` / `full` / `measure` (measure only, no byte changes) / `off`
   - Only engages when the client supports it and negotiation succeeds; unsupported / un-upgraded clients pass through byte-for-byte, any anomaly is `fail-closed` (drop + reconnect), never a wrong packet
-  - Only the covered MC protocols (1.19.2 / 1.20.1 / 1.21.1) have a cacheable-packet table; other versions (e.g. 1.18.2 / 26.1) are a no-op with bytes unchanged
+  - The cacheable-packet table covers every shipped variant (1.18.2 / 1.19.2 / 1.20.1 / 1.21.1 / 26.1); any other uncovered protocol is a no-op with bytes unchanged
 
 - `max_conn_per_ip`：Maximum simultaneous connections per IP (default: 9999)
   - Set to 0 or negative to disable limit
@@ -611,8 +611,8 @@ manual configuration. But "on by default" does not mean "always rewrites bytes" 
 when all of the following hold:
 
 - the client also has ZstdNet installed and enabled (advertised in the handshake);
-- the current MC protocol has a built-in cacheable-packet table (covers 1.19.2 / 1.20.1 / 1.21.1; **1.18.2 and 26.1
-  have no table yet → the connection is a no-op**);
+- the current MC protocol has a built-in cacheable-packet table (covers every shipped variant: 1.18.2 / 1.19.2 /
+  1.20.1 / 1.21.1 / 26.1; any other uncovered protocol → the connection is a no-op);
 - the connection is not using a trained dictionary.
 
 If any of these is unmet → the connection **passes through byte-for-byte**, exactly as if the feature were off; any

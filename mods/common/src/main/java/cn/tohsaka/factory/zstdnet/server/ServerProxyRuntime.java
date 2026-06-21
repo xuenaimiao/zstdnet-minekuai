@@ -563,12 +563,12 @@ final class ServerProxyRuntime {
                         ? CacheablePacketTable.forProtocol(clientProtocolVersion)
                         : null;
                 final boolean chunkCacheActive = cacheableTable != null && !cacheableTable.isEmpty();
-                // 启用了 chunk_cache、客户端也 advertise，但本协议没有可缓存包表（如 1.18.2 / 26.1）→ 该连接是 no-op。
+                // 启用了 chunk_cache、客户端也 advertise，但本协议没有可缓存包表（未在 CacheablePacketTable 覆盖的协议版本）→ 该连接是 no-op。
                 // 字节仍逐字节一致、绝不损坏，但运营者应知道这些客户端拿不到收益，故每协议告警一次。
                 if (cfg.chunkCache.engagesCache() && clientChunkCacheVersion >= ChunkCacheFormat.VERSION_REF
                     && !downstreamDict && !chunkCacheActive
                     && chunkCacheUnsupportedWarned.add(clientProtocolVersion)) {
-                    LOGGER.warn("[chunk_cache] enabled (mode={}) but no cacheable-packet table for MC protocol {} -> chunk cache is a NO-OP for these clients (bytes stay identical). Covered protocols: 758/760/763/767.",
+                    LOGGER.warn("[chunk_cache] enabled (mode={}) but no cacheable-packet table for MC protocol {} -> chunk cache is a NO-OP for these clients (bytes stay identical). Covered protocols: 758/760/763/767/775.",
                         cfg.chunkCache.configValue(), clientProtocolVersion);
                 }
                 // 协商出的生效 CRC 版本（写入 s2c PREAMBLE；>=2 才发 WARM_REF）。warm 集合仅在 v2 生效时携带。

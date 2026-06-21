@@ -34,6 +34,7 @@ class CacheablePacketTableTest {
         assertTrue(CacheablePacketTable.forProtocol(760).isFullChunk(0x21)); // 1.19.2
         assertTrue(CacheablePacketTable.forProtocol(763).isFullChunk(0x24)); // 1.20.1
         assertTrue(CacheablePacketTable.forProtocol(767).isFullChunk(0x27)); // 1.21.1
+        assertTrue(CacheablePacketTable.forProtocol(775).isFullChunk(0x2D)); // 26.1.2（非混淆，注册序 45）
     }
 
     @Test
