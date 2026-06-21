@@ -168,7 +168,7 @@ per-variant `mods/<ver>/<variant>/libs/`). Every variant's `build.gradle` redire
 artifact task's `destinationDirectory` there — `jarJar` (Forge 1.18.2/1.19.2/1.20.1 + NeoForge
 1.20.1), `shadowJar` (NeoForge 1.21.1/26.1 + Bukkit), or `remapJar` (Fabric). The filename already
 encodes the MC version + loader (`zstdnet-<mc>-<loader>-<mod_version>.jar`, e.g.
-`zstdnet-1.21.1-neoforge-1.4.2-m1.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`), so the ten
+`zstdnet-1.21.1-neoforge-1.4.2-m2.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`), so the ten
 jars coexist in one folder with no collision. The transient slim/thin/dev jars stay in each variant's
 own `libs/` (and the Forge/NeoForge/Bukkit variants delete theirs after build).
 

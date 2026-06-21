@@ -424,6 +424,12 @@ Notes:
 
 - `transform_coalesce_ms`：(Reserved, not yet active) coalesce window in ms, currently always treated as 0 (default: 0)
 
+- `chunk_cache`：Chunk Reference Cache (CRC), for servers with many repeated / revisited chunks (default: auto, **on by default**)
+  - Before ZSTD, replaces chunks the client already holds with 8/16-byte tokens (or byte-level deltas), stacked with ZSTD (see "[Chunk Reference Cache (CRC, on by default)](#chunk-reference-cache-crc-on-by-default)")
+  - `auto` (default, recommended) / `ref` / `full` / `measure` (measure only, no byte changes) / `off`
+  - Only engages when the client supports it and negotiation succeeds; unsupported / un-upgraded clients pass through byte-for-byte, any anomaly is `fail-closed` (drop + reconnect), never a wrong packet
+  - Only the covered MC protocols (1.19.2 / 1.20.1 / 1.21.1) have a cacheable-packet table; other versions (e.g. 1.18.2 / 26.1) are a no-op with bytes unchanged
+
 - `max_conn_per_ip`：Maximum simultaneous connections per IP (default: 9999)
   - Set to 0 or negative to disable limit
   - Prevents a single IP from using too many connections
@@ -508,6 +514,12 @@ Notes:
   - The connection is only actually transformed when the target server also has `transform=true`; otherwise it stays byte-for-byte compatible passthrough
   - Aimed at entity/mob-heavy servers (Create contraptions, mob farms), cutting downstream bandwidth substantially in those scenes
 
+- `chunk_cache`：whether to participate in the Chunk Reference Cache CRC (default: true, **on by default**)
+  - When enabled, the client advertises support in the handshake and installs a reverse decoder for the server→client stream; it only actually engages when the target server also enables it (`chunk_cache=auto/ref/full`), otherwise byte-for-byte passthrough
+  - Stacked with ZSTD: repeated chunks replay from the local cache instead of being received again (see "[Chunk Reference Cache (CRC, on by default)](#chunk-reference-cache-crc-on-by-default)")
+- `chunk_cache_persist`：whether to persist fully-sent chunks to disk for cross-session WARM_REF (default: true); off = in-session de-dup only
+- `chunk_cache_persist_mb`：disk + memory budget for the cross-session cache, per server, in MiB (default: 64)
+
 ## Compression Tuning & Dictionaries
 
 All of the options below are opt-in and off by default — the defaults keep the exact original behavior and stay compatible with un-updated clients.
@@ -550,6 +562,89 @@ Players need no setup in either case. When they join, the server announces its d
 
 Note: if you later change the server's dictionary, players who cached the old one may need to delete `config/zstdnet/dict/auto/` once to recover.
 
+## Chunk Reference Cache (CRC, on by default)
+
+> **Origin**: this feature's `full` / `ref` / `patch` chunk-reuse approach is **inspired by / references** the
+> open-source project [BandwidthOptimizer](https://github.com/duckgun13476/BandwidthOptimizer) (BO, GNU LGPL 2.1).
+> ZstdNet's implementation is a **clean-room, independent rewrite that uses none of BO's code** — the wire format,
+> caching strategy, negotiation and `fail-closed` rules are all designed and implemented in this repository; only
+> the *idea / direction* pays homage to BO's design.
+
+For scenarios where **the same chunk is sent repeatedly** (walking in and out of chunks, cross-dimension round
+trips, reloading after a reconnect — common on Create-based servers and large modpacks), ZSTD's sliding window can
+only fold repetition within "the last little while"; a chunk that reappears outside the window, or across a
+reconnect, still gets retransmitted in full. The Chunk Reference Cache (CRC) fills exactly that gap:
+
+- **In-session REF**: when the same chunk is sent again within this game session, only an **8-byte reference token**
+  is sent, and the client replays its locally cached original bytes.
+- **Cross-session WARM_REF**: fully-sent chunks are persisted to local disk; chunks still held **after a reconnect**
+  are sent as a **16-byte token**, saving bandwidth across game sessions.
+- **Byte-level PATCH**: when a chunk changed only slightly (e.g. block-entity data), a **delta** against an
+  already-held baseline is sent instead of the whole chunk.
+- All other, non-cacheable packets pass through **byte-for-byte**.
+
+### Stacked with ZSTD, not either/or
+
+CRC runs **before ZSTD**: it first removes the repeated chunks that can be replaced by a token / delta, and
+**whatever remains is then compressed normally by ZSTD**. The two attack different kinds of redundancy:
+
+```text
+backend packet stream
+   │
+   ▼  CRC: repeated chunks → 8/16-byte tokens / small deltas (these bytes never reach ZSTD)
+   ▼  ZSTD: byte-level compression of the remaining brand-new chunks + other packets
+   ▼
+on-the-wire traffic  =  ZSTD(new content)  +  a handful of tokens
+```
+
+So CRC and ZSTD gains are **multiplicative**: CRC cuts the *number* of repeated chunks, ZSTD compresses the *bytes*
+of what's left. On servers with highly repetitive chunks, ratios that ZSTD alone can't reach become attainable by
+eliminating whole-chunk retransmissions. (CRC shares the single pre-ZSTD rewrite slot with the "entity packet-stream
+transform"; the two are mutually exclusive, with CRC taking priority, while ZSTD is always the fallback base layer —
+even when no pre-layer engages, the connection stays byte-for-byte identical to legacy.)
+
+### On by default, but only engages after negotiation
+
+Unlike LDM / dictionaries / the entity transform (off by default), CRC is **on by default** (server
+`chunk_cache=auto`, client `chunk_cache=true`), so out of the box you already get **ZSTD + CRC stacked**, with no
+manual configuration. But "on by default" does not mean "always rewrites bytes" — it only engages on a connection
+when all of the following hold:
+
+- the client also has ZstdNet installed and enabled (advertised in the handshake);
+- the current MC protocol has a built-in cacheable-packet table (covers 1.19.2 / 1.20.1 / 1.21.1; **1.18.2 and 26.1
+  have no table yet → the connection is a no-op**);
+- the connection is not using a trained dictionary.
+
+If any of these is unmet → the connection **passes through byte-for-byte**, exactly as if the feature were off; any
+runtime anomaly → it is **`fail-closed`: the connection drops and vanilla auto-reconnects, never sending a wrong
+packet**. Correctness does not depend on the built-in packet table: the table only tells the encoder *which* chunks
+are worth caching; a missing / wrong table only costs ratio, never corrupts data. That is why it is safe to enable
+by default: unsupported clients / versions degrade automatically, with no compatibility risk.
+
+### Modes & configuration
+
+Server `chunk_cache` (`config/zstdnet-server.properties`):
+
+- `auto` (**default, recommended**): once negotiated, automatically enables REF + cross-session WARM_REF + adaptive
+  bypass, and layers byte-level PATCH when it pays off; backs off temporarily after a run of non-paying chunks and
+  re-probes periodically.
+- `ref`: deterministic chunk de-duplication only (REF + WARM_REF); no PATCH, no adaptive bypass.
+- `full`: REF + WARM_REF + PATCH (deterministic, no bypass).
+- `measure`: **measure only, no byte changes** — reports the de-duplicable repeated-chunk traffic and how much the
+  existing ZSTD/LDM window already folds vs. the marginal headroom left, as a decision aid for adopting CRC.
+- `off`: fully disabled, byte-identical to legacy, zero overhead.
+
+Client `config/zstdnet-client.toml`:
+
+- `chunk_cache` (default true): whether to participate in the chunk reference cache.
+- `chunk_cache_persist` (default true): whether to persist fully-sent chunks to disk for cross-session WARM_REF;
+  off = in-session REF only.
+- `chunk_cache_persist_mb` (default 64): disk + memory budget for the cross-session cache (per server, in MiB).
+
+> Note: this is a relatively new addition, backed by byte-level correctness unit tests and `fail-closed` on
+> unsupported paths; before production, consider running `chunk_cache=measure` first to observe real gains, or roll
+> it out gradually.
+
 ## Dependencies
 
 - zstd-jni
@@ -565,6 +660,12 @@ maintainer. The whole remains distributed under the MIT License.
 Bundled third-party component: [zstd-jni](https://github.com/luben/zstd-jni) (Luben Karavelov, BSD 2-Clause),
 which embeds [Zstandard](https://github.com/facebook/zstd) (Meta, BSD 2-Clause). See the `LICENSE` and `NOTICE`
 files shipped alongside the release and bundled inside every jar.
+
+The "Chunk Reference Cache (CRC)" feature's `full` / `ref` / `patch` chunk-reuse **design approach is inspired by /
+references** the open-source project [BandwidthOptimizer](https://github.com/duckgun13476/BandwidthOptimizer)
+(GNU LGPL 2.1). ZstdNet's implementation is a **clean-room, independent rewrite that uses none of its code**, paying
+homage only to the idea and direction; the copyright and license of this repository's implementation belong to this
+project.
 
 ## License
 
