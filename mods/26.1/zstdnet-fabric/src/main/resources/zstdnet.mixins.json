@@ -18,6 +18,7 @@
     "DirectJoinServerScreenMixin",
     "JoinMultiplayerScreenMixin",
     "NetworkServerEntryAccessor",
+    "PlayerTabOverlayMixin",
     "ShareToLanScreenMixin"
   ],
   "injectors": {

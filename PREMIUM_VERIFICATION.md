@@ -116,3 +116,8 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
 - **玩家档案迁移**：开启后被验证玩家从离线 UUID（`OfflinePlayer:<name>`）切到正版 UUID，原有离线 `playerdata` 不会自动加载（与任何离线→在线切换同理）。建议在新服或可接受重置时启用；后续可加「按名映射」一次性迁移。
 - 依赖两端都装 ZstdNet（本就是硬要求）；原版/盗版客户端不应答查询 → 按 `premium_verification_mode` 处理（默认宽松=离线进服）。
 - `premium_session_server` 可对接外置登录；`premium_pass_real_ip` 默认关（CGNAT 等场景 IP 可能不一致）。
+- **TAB 列表头像**：原版 `PlayerTabOverlay` 仅在「本地服 或 连接已加密」时绘制玩家名左侧的头像（1.19+ 安全聊天门控）。
+  ZstdNet 为压缩明文而<b>刻意不开 AES</b>，故正版玩家世界内皮肤正常、TAB 头像却被原版隐藏（表现同离线服「只有名字」）。
+  客户端补丁点 `zstdnet_tab_player_head`（Forge/NeoForge coremod）/ `PlayerTabOverlayMixin`（Fabric）把那处
+  `Connection.isEncrypted()` 对「走 ZstdNet 本地代理（环回端点）的连接」一并判为安全，恢复头像绘制；仅作用于本地代理连接，
+  与 ForceTablistHeads/TabHeads 等同类客户端 mod 思路一致。此为纯客户端渲染修复，与皮肤数据/正版验证本身无关。

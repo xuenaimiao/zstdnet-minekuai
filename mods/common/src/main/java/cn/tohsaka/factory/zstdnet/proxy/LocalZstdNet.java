@@ -50,6 +50,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -61,6 +62,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -75,6 +77,10 @@ public final class LocalZstdNet {
     private static final AtomicInteger WORKER_SEQ = new AtomicInteger(1);
     private static final AtomicInteger ACCEPT_SEQ = new AtomicInteger(1);
     private static final AtomicInteger UDP_SEQ = new AtomicInteger(1);
+
+    // 当前活跃的客户端本地代理监听端口（127.0.0.1:port）。每个 ProxyHandle 在创建时登记、close 时撤销。
+    // 客户端补丁点据此识别「本连接是 ZstdNet 本地代理（明文，不走 AES）」——见 {@link #isLocalProxyEndpoint}。
+    private static final Set<Integer> ACTIVE_LOCAL_PROXY_PORTS = ConcurrentHashMap.newKeySet();
     private static final ExecutorService WORKERS = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "zstdnet-worker-" + WORKER_SEQ.getAndIncrement());
         t.setDaemon(true);
@@ -208,6 +214,25 @@ public final class LocalZstdNet {
         UdpForwarder udpForwarder = startUdpForwarder(remoteHost, remotePort, listener.getLocalPort());
 
         return new ProxyHandle(listener, running, acceptThread, udpForwarder, resolvedMode, remoteHost, remotePort, stats);
+    }
+
+    /**
+     * 判断 {@code address} 是否为当前活跃的 ZstdNet 客户端本地代理端点（环回地址 + 已登记的本地监听端口）。
+     * <p>
+     * 客户端补丁点用它识别「本连接由 ZstdNet 接管（明文转发，永不开 AES）」，从而在原版那些以
+     * {@code Connection.isEncrypted()} 作为「安全连接」判定的地方（如 TAB 列表头像绘制门控）把代理连接
+     * 视作安全连接——否则正版玩家的 TAB 头像会因连接未加密而被原版隐藏。仅影响走本地代理的连接，
+     * 直连/非环回连接行为不变。
+     */
+    public static boolean isLocalProxyEndpoint(SocketAddress address) {
+        if (!(address instanceof InetSocketAddress inet)) {
+            return false;
+        }
+        InetAddress ip = inet.getAddress();
+        if (ip == null || !ip.isLoopbackAddress()) {
+            return false;
+        }
+        return ACTIVE_LOCAL_PROXY_PORTS.contains(inet.getPort());
     }
 
     private static UdpForwarder startUdpForwarder(String remoteHost, int remotePort, int localPort) {
@@ -1106,6 +1131,7 @@ public final class LocalZstdNet {
         private final String remoteHost;
         private final int remotePort;
         private final ProxyStats stats;
+        private final int localPort;
         private final Object voiceLock = new Object();
         private final List<Runnable> voiceStops = new ArrayList<>();
 
@@ -1127,10 +1153,13 @@ public final class LocalZstdNet {
             this.remoteHost = remoteHost;
             this.remotePort = remotePort;
             this.stats = stats;
+            // 端口在构造时定格（即便之后只关 listener 而保留会话，localPort() 仍稳定可用）。
+            this.localPort = listener.getLocalPort();
+            ACTIVE_LOCAL_PROXY_PORTS.add(this.localPort);
         }
 
         public int localPort() {
-            return listener.getLocalPort();
+            return localPort;
         }
 
         public Mode mode() {
@@ -1231,6 +1260,7 @@ public final class LocalZstdNet {
 
         @Override
         public void close() {
+            ACTIVE_LOCAL_PROXY_PORTS.remove(localPort);
             running.set(false);
             disarmVoicePorts();
             if (udpForwarder != null) {

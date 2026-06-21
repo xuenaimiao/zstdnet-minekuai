@@ -17,6 +17,7 @@
     "ConnectScreenMixin",
     "DirectJoinServerScreenMixin",
     "JoinMultiplayerScreenMixin",
+    "PlayerTabOverlayMixin",
     "ShareToLanScreenMixin"
   ],
   "injectors": {
