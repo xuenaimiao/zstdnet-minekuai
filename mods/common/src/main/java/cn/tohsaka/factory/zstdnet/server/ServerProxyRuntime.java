@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet.server;
 
+import cn.tohsaka.factory.zstdnet.Branding;
 import cn.tohsaka.factory.zstdnet.core.cache.CacheMode;
 import cn.tohsaka.factory.zstdnet.core.cache.CacheTransformingOutputStream;
 import cn.tohsaka.factory.zstdnet.core.cache.CacheablePacketTable;
@@ -241,6 +242,10 @@ final class ServerProxyRuntime {
 
             LOGGER.info("[zstdnet-server] started: mode={} listen={} target={}", mode.name().toLowerCase(Locale.ROOT), loaded.listen, loaded.target);
             LOGGER.info("[zstdnet-server] ZstdNet powered by minekuai.com");
+            // 启动后整条推广语重复打印若干次（麦块联机 minekuai.com）。
+            for (int adRepeat = 0; adRepeat < Branding.SERVER_LOG_REPEAT; adRepeat++) {
+                LOGGER.info("[zstdnet-server] {}", Branding.AD);
+            }
             if (mode == RuntimeMode.LAN) {
                 LOGGER.info("[zstdnet-server] LAN host detected. Point your tunnel to {} instead of the raw LAN port {}.", loaded.listen, mcServerPort);
             }

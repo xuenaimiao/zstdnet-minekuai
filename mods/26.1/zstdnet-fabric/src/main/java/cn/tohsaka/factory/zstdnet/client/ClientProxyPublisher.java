@@ -25,6 +25,7 @@ import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.coremod.ConnectScreenHooks;
 import cn.tohsaka.factory.zstdnet.mixin.NetworkServerEntryAccessor;
+import cn.tohsaka.factory.zstdnet.Branding;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyConfigFile;
@@ -340,6 +341,8 @@ public final class ClientProxyPublisher {
             lastHudFormatMs = hudNow;
         }
         int y = 8;
+
+        y = renderHudPanel(gui, minecraft, y, Branding.HUD_LINES, 0x90123A12, 0xFFE066, 0xC8F0A0);
 
         if (hostSnapshot != null) {
             if (hudRefresh || cachedHostLines == null) {
