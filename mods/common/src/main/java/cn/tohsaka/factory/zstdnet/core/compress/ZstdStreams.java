@@ -19,10 +19,6 @@
 
 package cn.tohsaka.factory.zstdnet.core.compress;
 
-import com.github.luben.zstd.Zstd;
-import com.github.luben.zstd.ZstdInputStream;
-import com.github.luben.zstd.ZstdOutputStream;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -52,16 +48,11 @@ public final class ZstdStreams {
      * @param options       附加参数；null 等价于 {@link CompressionOptions#none()}
      * @param useDictionary 本方向是否使用字典（由上层协商结果决定）
      */
-    public static ZstdOutputStream newCompressor(OutputStream out, int level, CompressionOptions options, boolean useDictionary) throws IOException {
-        ZstdOutputStream zstdOut = new ZstdOutputStream(out, level);
-        zstdOut.setCloseFrameOnFlush(false);
-        if (options != null && options.longDistanceMatching()) {
-            zstdOut.setLong(options.effectiveWindowLog());
-        }
-        if (useDictionary && options != null && options.hasDictionary()) {
-            zstdOut.setDict(options.dictionary());
-        }
-        return zstdOut;
+    public static OutputStream newCompressor(OutputStream out, int level, CompressionOptions options, boolean useDictionary) throws IOException {
+        boolean longMatching = options != null && options.longDistanceMatching();
+        int windowLog = longMatching ? options.effectiveWindowLog() : 0;
+        byte[] dict = (useDictionary && options != null && options.hasDictionary()) ? options.dictionary() : null;
+        return ZstdCodecs.newCompressor(out, level, longMatching, windowLog, dict);
     }
 
     /**
@@ -71,15 +62,11 @@ public final class ZstdStreams {
      * @param options    附加参数；仅当本端 windowLog &gt; 27 才会抬高解码窗口上限
      * @param dictionary 解压所需字典；null 表示无字典（与无字典帧匹配）
      */
-    public static ZstdInputStream newDecompressor(InputStream in, CompressionOptions options, byte[] dictionary) throws IOException {
-        ZstdInputStream zstdIn = new ZstdInputStream(in);
-        if (options != null && options.decompressWindowLogMax() > CompressionOptions.DEFAULT_DECOMPRESS_WINDOW_LOG_MAX) {
-            zstdIn.setLongMax(options.decompressWindowLogMax());
-        }
-        if (dictionary != null && dictionary.length > 0) {
-            zstdIn.setDict(dictionary);
-        }
-        return zstdIn;
+    public static InputStream newDecompressor(InputStream in, CompressionOptions options, byte[] dictionary) throws IOException {
+        int windowLogMax = (options != null && options.decompressWindowLogMax() > CompressionOptions.DEFAULT_DECOMPRESS_WINDOW_LOG_MAX)
+            ? options.decompressWindowLogMax()
+            : 0;
+        return ZstdCodecs.newDecompressor(in, windowLogMax, dictionary);
     }
 
     /**
@@ -102,7 +89,7 @@ public final class ZstdStreams {
         }
         long dictId;
         try {
-            dictId = Zstd.getDictIdFromFrame(read == head.length ? head : Arrays.copyOf(head, read));
+            dictId = ZstdCodecs.getDictIdFromFrame(read == head.length ? head : Arrays.copyOf(head, read));
         } catch (Throwable ignored) {
             // getDictIdFromFrame 在字节不足/非 zstd 帧时已返回 0；此处仅兜底原生异常。
             dictId = 0L;

@@ -22,14 +22,13 @@ package cn.tohsaka.factory.zstdnet.core.transform;
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
-import com.github.luben.zstd.ZstdInputStream;
-import com.github.luben.zstd.ZstdOutputStream;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -181,7 +180,7 @@ class StreamTransformTest {
 
     private static byte[] transformThenCompress(byte[] raw, int writeChunk) throws IOException {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
-        ZstdOutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
+        OutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
         try (TransformingOutputStream t = new TransformingOutputStream(zstd, TransformFormat.VERSION_LAYER_A)) {
             for (int i = 0; i < raw.length; i += writeChunk) {
                 int n = Math.min(writeChunk, raw.length - i);
@@ -193,7 +192,7 @@ class StreamTransformTest {
     }
 
     private static byte[] decompressThenUntransform(byte[] compressed, int readBuf) throws IOException {
-        ZstdInputStream zin = ZstdStreams.newDecompressor(new ByteArrayInputStream(compressed), CompressionOptions.none(), null);
+        InputStream zin = ZstdStreams.newDecompressor(new ByteArrayInputStream(compressed), CompressionOptions.none(), null);
         try (UntransformingInputStream u = new UntransformingInputStream(zin)) {
             return readAll(u, readBuf);
         }

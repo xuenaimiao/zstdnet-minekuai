@@ -19,8 +19,6 @@
 
 package cn.tohsaka.factory.zstdnet.core.compress;
 
-import com.github.luben.zstd.Zstd;
-
 /**
  * 不可变压缩参数：在基础 ZSTD level 之外附加可选的「长距离匹配(LDM)」与「训练字典」。
  * <p>
@@ -30,7 +28,7 @@ import com.github.luben.zstd.Zstd;
  *         {@code setLong} 也不调用 {@code setDict}，压缩输出与旧版完全相同。</li>
  *     <li>{@code level} 不在此处：服务端用 {@code zstdnet-server.properties} 的 level，
  *         客户端用 {@code zstdnet-client.toml} 的 level，二者语义不同，保持各自独立。</li>
- *     <li>字典 id 由字典内容算出（{@link Zstd#getDictIdFromDict(byte[])}），用于连接建立时的
+ *     <li>字典 id 由字典内容算出（{@link ZstdCodecs#getDictIdFromDict(byte[])}），用于连接建立时的
  *         隐式协商：训练字典会把该 id 写进每个压缩帧头，对端无需持有字典即可读出。</li>
  * </ul>
  */
@@ -58,7 +56,7 @@ public final class CompressionOptions {
         this.longDistanceMatching = longDistanceMatching;
         this.windowLog = windowLog;
         this.dictionary = dictionary != null && dictionary.length > 0 ? dictionary : null;
-        this.dictionaryId = this.dictionary == null ? 0L : Zstd.getDictIdFromDict(this.dictionary);
+        this.dictionaryId = this.dictionary == null ? 0L : ZstdCodecs.getDictIdFromDict(this.dictionary);
     }
 
     /** 不附加任何额外参数（与历史行为逐字节一致）。 */

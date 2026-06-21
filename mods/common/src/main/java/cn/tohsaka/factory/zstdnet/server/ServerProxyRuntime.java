@@ -32,6 +32,7 @@ import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.core.compress.DictionaryFiles;
 import cn.tohsaka.factory.zstdnet.core.compress.DictionarySampler;
 import cn.tohsaka.factory.zstdnet.core.compress.DictionaryTrainer;
+import cn.tohsaka.factory.zstdnet.core.compress.ZstdCodecs;
 import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.io.CountingInputStream;
 import cn.tohsaka.factory.zstdnet.core.io.CountingOutputStream;
@@ -48,8 +49,6 @@ import cn.tohsaka.factory.zstdnet.core.transform.TransformFormat;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformHandshake;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformingOutputStream;
-import com.github.luben.zstd.ZstdInputStream;
-import com.github.luben.zstd.ZstdOutputStream;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -517,7 +516,7 @@ final class ServerProxyRuntime {
 
                 // 在派发双向泵之前同步读首包（握手），提取并剥离客户端 transform 能力标记，再决定下行是否变换。
                 // 因后端只有在收到我方转发的握手后才会回数据，所以此处读握手不会与 s2c 抢跑。
-                ZstdInputStream upstreamDecompressor = null;
+                InputStream upstreamDecompressor = null;
                 int clientTransformVersion = 0;
                 int clientProtocolVersion = 0;
                 int clientChunkCacheVersion = 0;
@@ -610,7 +609,7 @@ final class ServerProxyRuntime {
                     ? chunkCacheMeasurement().newCollector(clientProtocolVersion)
                     : null;
 
-                final ZstdInputStream c2sDecompressor = upstreamDecompressor;
+                final InputStream c2sDecompressor = upstreamDecompressor;
                 Future<Exception> c2s = workers.submit(() -> {
                     try {
                         pumpDecompress(upstream, c2sDecompressor, stats);
@@ -780,7 +779,7 @@ final class ServerProxyRuntime {
      * Client -> backend: 持续解压 zstd 流并透传到后端。握手首包已在 {@link #handleClient} 中读出并转发，
      * 这里只负责其余字节的解压循环。
      */
-    private void pumpDecompress(Socket dst, ZstdInputStream zstdIn, TrafficStats stats) throws IOException {
+    private void pumpDecompress(Socket dst, InputStream zstdIn, TrafficStats stats) throws IOException {
         try (zstdIn) {
             OutputStream dstOut = dst.getOutputStream();
             byte[] buf = new byte[16 * 1024];
@@ -950,7 +949,7 @@ final class ServerProxyRuntime {
         OutputStream limitedDst = new RateLimitedOutputStream(dst, perConnLimiter, globalLimiter);
         DictionarySampler sampler = this.dictionarySampler;
         DictionarySampler.Collector sampleCollector = sampler != null ? sampler.newCollector() : null;
-        ZstdOutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary);
+        OutputStream zstdOut = ZstdStreams.newCompressor(new CountingOutputStream(limitedDst, stats::addZstdDown), level, options, useDictionary);
         // 变换层 / CRC 层位于 ZSTD 之前。三者互斥（CRC 优先于实体变换）：
         //   chunkCache → 区块引用缓存（相同区块发 REF 令牌）；transform → 实体包去交错；都不开 → sink 即 zstdOut，行为与历史一致。
         // 关闭 sink 会级联落定剩余帧并关闭 zstdOut；跨 block 列匹配依赖 zstdOut 的连续帧（见 ZstdStreams）。
@@ -1498,7 +1497,7 @@ final class ServerProxyRuntime {
                         "[zstdnet-server] loaded compression dictionary '{}' ({} bytes, id {})",
                         dictName,
                         dictionary.length,
-                        com.github.luben.zstd.Zstd.getDictIdFromDict(dictionary)
+                        ZstdCodecs.getDictIdFromDict(dictionary)
                     );
                 }
             } catch (Exception ex) {
@@ -1599,7 +1598,7 @@ final class ServerProxyRuntime {
                         "[zstdnet-server] dictionary_auto: trained {} ({} bytes, id {}).",
                         trainedDict,
                         dictionary.length,
-                        com.github.luben.zstd.Zstd.getDictIdFromDict(dictionary)
+                        ZstdCodecs.getDictIdFromDict(dictionary)
                     );
                 }
                 done.set(true);
@@ -1678,7 +1677,7 @@ final class ServerProxyRuntime {
                 "[zstdnet-server] trained dictionary written to {} ({} bytes, id {}). Set dictionary=trained.dict and dictionary_train=false to use it, then restart.",
                 out,
                 dictionary.length,
-                com.github.luben.zstd.Zstd.getDictIdFromDict(dictionary)
+                ZstdCodecs.getDictIdFromDict(dictionary)
             );
         } catch (Exception ex) {
             LOGGER.error("[zstdnet-server] dictionary training failed: {}", ex.toString());

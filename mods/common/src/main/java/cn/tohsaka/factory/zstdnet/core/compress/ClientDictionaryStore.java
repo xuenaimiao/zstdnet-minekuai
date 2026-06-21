@@ -19,8 +19,6 @@
 
 package cn.tohsaka.factory.zstdnet.core.compress;
 
-import com.github.luben.zstd.Zstd;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -91,7 +89,7 @@ public final class ClientDictionaryStore {
                 return null;
             }
             byte[] bytes = Files.readAllBytes(file);
-            return bytes.length > 0 && Zstd.getDictIdFromDict(bytes) == dictId ? bytes : null;
+            return bytes.length > 0 && ZstdCodecs.getDictIdFromDict(bytes) == dictId ? bytes : null;
         } catch (IOException ex) {
             return null;
         }
@@ -107,7 +105,7 @@ public final class ClientDictionaryStore {
             || dictBytes == null
             || dictBytes.length == 0
             || dictBytes.length > MAX_DICTIONARY_BYTES
-            || Zstd.getDictIdFromDict(dictBytes) != dictId) {
+            || ZstdCodecs.getDictIdFromDict(dictBytes) != dictId) {
             return false;
         }
         Path dir = autoDir(configDir);

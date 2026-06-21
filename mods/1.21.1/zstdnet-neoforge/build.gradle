@@ -3,9 +3,6 @@ plugins {
     id 'idea'
     id 'maven-publish'
     id 'net.neoforged.moddev' version '2.0.141'
-    // 用 shadow 把 zstd-jni 扁平化 + 重定位进最终 mod jar（替代 jarJar 的嵌套模块），
-    // 避免与宿主（如 Mohist 自带的 zstd-jni）撞同名 JPMS 模块 com.github.luben.zstd_jni。
-    id 'com.gradleup.shadow' version '8.3.5'
 }
 
 version = mod_version
@@ -71,21 +68,35 @@ repositories {
     }
 }
 
-// shadow 只合并这个配置里的依赖——仅 zstd-jni，绝不把 Minecraft/NeoForge 误打进 jar。
+// 内嵌的 zstd-jni 以「普通资源 jar」放进最终 jar（见下方 stageEmbeddedZstd），不进模块路径、不重定位。
+// transitive=false：zstd-jni 无运行期传递依赖，只取它自身这一个 jar。
 configurations {
-    shadowBundle
+    embeddedZstd { transitive = false }
 }
 
 dependencies {
-    // 编译期 + dev 运行期用原包名 com.github.luben.zstd；重定位只发生在 shadowJar 产物里。
+    // 编译期 + dev/test 运行期用原包名 com.github.luben.zstd（dev 下宿主即有 zstd，门面走宿主模式）。
+    // 生产 jar 里不含这些类（plain jar 只打自身 output，不含依赖、也不 jarJar），仅内嵌资源 jar 作 fallback。
     implementation 'com.github.luben:zstd-jni:1.5.7-7'
     additionalRuntimeClasspath 'com.github.luben:zstd-jni:1.5.7-7'
-    // ★ 唯一被 shadow 合并进最终 jar 的依赖（会被重定位到 cn.tohsaka...shaded.*）。
-    shadowBundle 'com.github.luben:zstd-jni:1.5.7-7'
+    // ★ 内嵌进最终 jar 的那份原始 zstd-jni（不重定位，保留 com.github.luben.zstd，原生方法才能绑定）。
+    embeddedZstd 'com.github.luben:zstd-jni:1.5.7-7'
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.slf4j:slf4j-api:2.0.9'
 }
+
+// 把原始 zstd-jni jar 暂存成资源：cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar。
+// 运行时 ZstdCodecs 在宿主无 zstd 时解压它、用隔离 URLClassLoader 加载（包名不变→原生方法可绑定，
+// 又不作为具名模块进入 JPMS 图→不与宿主 / Mohist 自带的 zstd-jni 撞名）。
+def embeddedZstdDir = layout.buildDirectory.dir('generated/embeddedZstd')
+def stageEmbeddedZstd = tasks.register('stageEmbeddedZstd', Copy) {
+    from configurations.embeddedZstd
+    into embeddedZstdDir.map { it.dir('cn/tohsaka/factory/zstdnet/embedded') }
+    rename '.*', 'zstd-jni.jar'
+}
+// 资源根是 generated/embeddedZstd（其下含 cn/.../embedded/zstd-jni.jar），故资源以该完整包路径进 jar。
+sourceSets.main.resources.srcDir(embeddedZstdDir)
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
@@ -96,6 +107,9 @@ tasks.named('test', Test).configure {
 }
 
 processResources {
+    // 内嵌资源 jar 由 stageEmbeddedZstd 生成，须先于资源处理就绪。
+    dependsOn stageEmbeddedZstd
+
     def replaceProperties = [
         mod_id      : mod_id,
         mod_name    : mod_name,
@@ -109,16 +123,13 @@ processResources {
     }
 }
 
-// shadowJar 是最终发布产物：把 zstd-jni 扁平化进 mod jar 并重定位包名、剥掉其 module-info
-// （这样就不再有第二个名为 com.github.luben.zstd_jni 的 JPMS 模块——Mohist 上的冲突根源消失）。
-shadowJar {
+// 最终发布产物就是普通 mod jar：只含本模组自身的类 + 资源（含上面内嵌的 zstd-jni.jar 资源）。
+// 不再用 shadow——既不合并也不重定位 zstd-jni；它以普通资源内嵌、运行时由 ZstdCodecs 隔离加载，
+// 既不破坏 JNI 原生绑定，也不作为具名模块进入 JPMS 图（故不与 Mohist / 整合包自带的 zstd-jni 撞名）。
+jar {
     archiveClassifier = ''
     // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含 MC 版本+加载器，可区分）。
     destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
-    configurations = [project.configurations.shadowBundle]   // 只合并 zstd-jni
-    relocate 'com.github.luben.zstd', 'cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd'
-    exclude 'module-info.class'
-    mergeServiceFiles()
     manifest {
         attributes([
             'Specification-Title'    : mod_id,
@@ -130,18 +141,4 @@ shadowJar {
             'Automatic-Module-Name'  : "${mod_group_id}.${mod_id}"
         ])
     }
-}
-
-// 原 jar 改成 slim 并在 build 后删除，最终只保留 shadowJar 产物。
-jar {
-    archiveClassifier = 'slim'
-}
-
-tasks.register('deleteSlimJar', Delete) {
-    delete tasks.named('jar').flatMap { it.archiveFile }
-}
-
-tasks.named('build') {
-    dependsOn tasks.named('shadowJar')
-    finalizedBy tasks.named('deleteSlimJar')
 }

@@ -22,14 +22,13 @@ package cn.tohsaka.factory.zstdnet.core.transform;
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
-import com.github.luben.zstd.ZstdInputStream;
-import com.github.luben.zstd.ZstdOutputStream;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -291,7 +290,7 @@ class StreamTransformLayerBTest {
 
     private static byte[] transformThenCompress(byte[] raw, int writeChunk, int version, EntityPacketTable table) throws IOException {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
-        ZstdOutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
+        OutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
         try (TransformingOutputStream t = new TransformingOutputStream(zstd, version, table)) {
             for (int i = 0; i < raw.length; i += writeChunk) {
                 int n = Math.min(writeChunk, raw.length - i);
@@ -303,7 +302,7 @@ class StreamTransformLayerBTest {
     }
 
     private static byte[] decompressThenUntransform(byte[] compressed, int readBuf) throws IOException {
-        ZstdInputStream zin = ZstdStreams.newDecompressor(new ByteArrayInputStream(compressed), CompressionOptions.none(), null);
+        InputStream zin = ZstdStreams.newDecompressor(new ByteArrayInputStream(compressed), CompressionOptions.none(), null);
         try (UntransformingInputStream u = new UntransformingInputStream(zin)) {
             return readAll(u, readBuf);
         }
@@ -312,7 +311,7 @@ class StreamTransformLayerBTest {
     /** 把已变换字节经 ZSTD 连续帧压缩后的字节数（模拟下行 flush-per-tick 的逐 block 压缩）。 */
     private static long compressedSize(byte[] data) throws IOException {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
-        ZstdOutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
+        OutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
         try (zstd) {
             zstd.write(data);
         }

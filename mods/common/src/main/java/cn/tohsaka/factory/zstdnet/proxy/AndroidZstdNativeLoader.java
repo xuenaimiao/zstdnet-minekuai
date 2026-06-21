@@ -6,7 +6,7 @@
 
 package cn.tohsaka.factory.zstdnet.proxy;
 
-import com.github.luben.zstd.util.Native;
+import cn.tohsaka.factory.zstdnet.core.compress.ZstdCodecs;
 import org.slf4j.Logger;
 
 import java.io.File;
@@ -24,7 +24,7 @@ final class AndroidZstdNativeLoader {
     }
 
     static void prepare(Logger logger) {
-        if (Native.isLoaded() || !isAndroidLikeRuntime()) {
+        if (ZstdCodecs.isNativeLoaded() || !isAndroidLikeRuntime()) {
             return;
         }
         if (!ATTEMPTED.compareAndSet(false, true)) {
@@ -44,7 +44,7 @@ final class AndroidZstdNativeLoader {
         try {
             File extracted = extract(resource, abi);
             System.setProperty("ZstdNativePath", extracted.getAbsolutePath());
-            Native.load();
+            ZstdCodecs.loadNative();
             logger.info("zstdnet: loaded Android zstd-jni native library for {} via zstd-jni loader from bundled resource {}", abi, resource);
         } catch (Throwable e) {
             logger.warn(

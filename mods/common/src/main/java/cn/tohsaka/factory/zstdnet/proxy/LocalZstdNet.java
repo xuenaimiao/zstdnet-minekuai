@@ -38,8 +38,6 @@ import cn.tohsaka.factory.zstdnet.core.cache.Hash128;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformHandshake;
 import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import cn.tohsaka.factory.zstdnet.core.transform.UntransformingInputStream;
-import com.github.luben.zstd.ZstdInputStream;
-import com.github.luben.zstd.ZstdOutputStream;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -521,7 +519,7 @@ public final class LocalZstdNet {
             final Map<Hash128, byte[]> warmSnapshot = cacheStore != null ? cacheStore.snapshotWarm() : Map.of();
 
             Future<?> upstreamWriter = WORKERS.submit(() -> {
-                try (ZstdOutputStream zstdOut = ZstdStreams.newCompressor(
+                try (OutputStream zstdOut = ZstdStreams.newCompressor(
                     new CountingOutputStream(upstream.getOutputStream(), stats::addClientToServerZstd),
                     level,
                     options,
@@ -556,7 +554,7 @@ public final class LocalZstdNet {
             final AtomicBoolean producedAny = new AtomicBoolean(false);
             Future<?> downstreamWriter = WORKERS.submit(() -> {
                 OutputStream clientOut = null;
-                try (ZstdInputStream zstdIn = ZstdStreams.newDecompressor(
+                try (InputStream zstdIn = ZstdStreams.newDecompressor(
                     new CountingInputStream(upstream.getInputStream(), stats::addServerToClientZstd),
                     options,
                     clientDict

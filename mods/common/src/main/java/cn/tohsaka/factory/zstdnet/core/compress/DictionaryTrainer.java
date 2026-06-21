@@ -19,8 +19,6 @@
 
 package cn.tohsaka.factory.zstdnet.core.compress;
 
-import com.github.luben.zstd.ZstdDictTrainer;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,11 +61,11 @@ public final class DictionaryTrainer {
             return null;
         }
 
-        ZstdDictTrainer trainer = new ZstdDictTrainer(SAMPLE_BUFFER_BYTES, dictSizeBytes);
+        Object trainer = ZstdCodecs.newDictTrainer(SAMPLE_BUFFER_BYTES, dictSizeBytes);
         long accepted = 0;
         for (Path file : sampleFiles) {
             byte[] sample = Files.readAllBytes(file);
-            if (sample.length > 0 && trainer.addSample(sample)) {
+            if (sample.length > 0 && ZstdCodecs.dictTrainerAddSample(trainer, sample)) {
                 accepted += sample.length;
             }
         }
@@ -76,7 +74,7 @@ public final class DictionaryTrainer {
             return null;
         }
         try {
-            byte[] dictionary = trainer.trainSamples();
+            byte[] dictionary = ZstdCodecs.dictTrainerTrain(trainer);
             return dictionary != null && dictionary.length > 0 ? dictionary : null;
         } catch (RuntimeException ex) {
             // ZstdException 等：样本不适合训练时抛出，按失败处理。

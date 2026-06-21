@@ -28,6 +28,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PushbackInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -83,7 +85,7 @@ class CompressionDictionaryTest {
         PushbackInputStream pin = new PushbackInputStream(new ByteArrayInputStream(frame), ZstdStreams.FRAME_DICT_ID_PEEK);
         assertEquals(dictId, ZstdStreams.peekFrameDictId(pin));
         byte[] decoded;
-        try (ZstdInputStream in = ZstdStreams.newDecompressor(pin, options, dictionary)) {
+        try (InputStream in = ZstdStreams.newDecompressor(pin, options, dictionary)) {
             decoded = in.readAllBytes();
         }
         assertArrayEquals(data, decoded);
@@ -175,7 +177,7 @@ class CompressionDictionaryTest {
 
     private static byte[] compress(byte[] data, int level, CompressionOptions options, boolean useDictionary) throws Exception {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
-        try (ZstdOutputStream out = ZstdStreams.newCompressor(wire, level, options, useDictionary)) {
+        try (OutputStream out = ZstdStreams.newCompressor(wire, level, options, useDictionary)) {
             out.write(data);
         }
         return wire.toByteArray();

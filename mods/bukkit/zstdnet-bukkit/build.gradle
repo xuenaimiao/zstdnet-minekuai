@@ -2,7 +2,6 @@ plugins {
     id 'java'
     id 'eclipse'
     id 'idea'
-    id 'com.gradleup.shadow' version '8.3.5'
 }
 
 version = mod_version
@@ -43,15 +42,37 @@ repositories {
     maven { url = 'https://oss.sonatype.org/content/repositories/snapshots' }
 }
 
+// 内嵌的 zstd-jni 以「普通资源 jar」放进最终 jar（见下方 stageEmbeddedZstd），不进 classpath、不重定位。
+// transitive=false：zstd-jni 无运行期传递依赖，只取它自身这一个 jar。
+configurations {
+    embeddedZstd { transitive = false }
+}
+
 dependencies {
     compileOnly "org.spigotmc:spigot-api:${spigot_api_version}"
     // common 核心用 slf4j 记日志；Paper/Spigot 1.20+ 运行时自带 slf4j-api（log4j-slf4j2 桥），故仅编译期依赖、不打包，避免与服务端的实现冲突。
     compileOnly 'org.slf4j:slf4j-api:2.0.9'
+    // 编译期 + test 运行期用原包名 com.github.luben.zstd（test 下宿主即有 zstd，门面走宿主模式）；
+    // 生产 jar 不含这些类（shadowJar configurations=[] 不合并），仅内嵌资源 jar 作 fallback。
     implementation "com.github.luben:zstd-jni:${zstd_version}"
+    // ★ 内嵌进最终 jar 的那份原始 zstd-jni（不重定位，保留 com.github.luben.zstd，原生方法才能绑定）。
+    embeddedZstd "com.github.luben:zstd-jni:${zstd_version}"
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.slf4j:slf4j-api:2.0.9'
 }
+
+// 把原始 zstd-jni jar 暂存成资源：cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar。
+// 运行时 ZstdCodecs 在宿主无 zstd 时解压它、用隔离 URLClassLoader 加载（包名不变→原生方法可绑定，
+// 又不进入宿主类加载器命名空间→不与宿主 / Mohist 自带的 zstd-jni 撞类）。
+def embeddedZstdDir = layout.buildDirectory.dir('generated/embeddedZstd')
+def stageEmbeddedZstd = tasks.register('stageEmbeddedZstd', Copy) {
+    from configurations.embeddedZstd
+    into embeddedZstdDir.map { it.dir('cn/tohsaka/factory/zstdnet/embedded') }
+    rename '.*', 'zstd-jni.jar'
+}
+// 资源根是 generated/embeddedZstd（其下含 cn/.../embedded/zstd-jni.jar），故资源以该完整包路径进 jar。
+sourceSets.main.resources.srcDir(embeddedZstdDir)
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
@@ -62,6 +83,9 @@ test {
 }
 
 processResources {
+    // 内嵌资源 jar 由 stageEmbeddedZstd 生成，须先于资源处理就绪。
+    dependsOn stageEmbeddedZstd
+
     // expand 默认按平台字符集读文件，Windows 上会破坏 plugin.yml 里的非 ASCII；锁定 UTF-8。
     filteringCharset = 'UTF-8'
 
@@ -77,26 +101,12 @@ processResources {
     }
 }
 
-// 把 zstd-jni 打进 fat-jar（插件无 jarJar/include 机制）。
-// 重定位 com.github.luben.zstd 到私有命名空间，避免与宿主（如 Mohist/Arclight 自带的 zstd-jni）
-// 撞类/撞 JPMS 模块。重定位对原生加载安全：zstd-jni 的原生库在 jar 根目录（linux/amd64/…、win/amd64/…），
-// 由绝对 classpath 路径 + os.name/os.arch 加载，不在 com/github/luben/zstd/ 包路径下，故包重定位不影响它。
-shadowJar {
+// 最终发布产物就是普通插件 jar：只打包插件自身的类 + 资源（含上面内嵌的 zstd-jni.jar 资源）。
+// 不再用 shadow fat-jar——既不合并也不重定位 zstd-jni。旧做法重定位 com.github.luben.zstd 会打断 JNI
+// 原生方法绑定（dll/so 符号名编译期写死原包名 → UnsatisfiedLinkError）；现改为内嵌资源 + 运行时隔离加载：
+// 包名不变故原生方法可绑定，又不进宿主类加载器命名空间，故仍不与宿主（Mohist/Arclight 自带的 zstd-jni）撞类。
+jar {
     archiveClassifier = ''
     // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含加载器，可区分）。
     destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
-    relocate 'com.github.luben.zstd', 'cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd'
-}
-
-jar {
-    archiveClassifier = 'thin'
-}
-
-tasks.register('deleteThinJar', Delete) {
-    delete tasks.named('jar').flatMap { it.archiveFile }
-}
-
-tasks.named('build') {
-    dependsOn tasks.named('shadowJar')
-    finalizedBy tasks.named('deleteThinJar')
 }
