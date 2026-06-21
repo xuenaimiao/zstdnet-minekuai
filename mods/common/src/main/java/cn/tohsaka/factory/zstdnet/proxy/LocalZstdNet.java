@@ -23,6 +23,7 @@ import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.io.StreamTransfer;
 import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
+import cn.tohsaka.factory.zstdnet.core.protocol.LoginDisconnect;
 import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
@@ -93,6 +94,20 @@ public final class LocalZstdNet {
     // 对已持有区块发 WARM_REF（跨会话省传）。关掉只退化为会话内 REF（仍线兼容、仍 fail-closed）。
     private static volatile boolean clientCachePersist = true;
     private static volatile long clientCachePersistBytes = ChunkCacheFormat.DEFAULT_PERSIST_BYTES;
+
+    // 登录态友好断开提示：客户端装了 ZstdNet 而对端没有（或后端不可达）时，原版只会显示无原因的「连接中断」。
+    // 本地代理在登录阶段探测到对端不会说 ZSTD（首帧解压失败 / 直接 EOF）或后端拨号失败时，主动合成一个登录断开包，
+    // 让玩家在原版断开界面看到明确原因，而不是一脸懵的「连接中断」。
+    private static final String DISCONNECT_NO_BACKEND =
+        "ZstdNet：无法与服务器建立压缩连接。\n\n"
+        + "已连接到服务器，但对方没有运行 ZstdNet 服务端（或服务端未启用 / 版本不匹配 / 连接被拒绝）。\n"
+        + "请联系服主在服务器安装并启用 ZstdNet 服务端；\n"
+        + "若该服务器本就没有 ZstdNet，可在客户端配置 zstdnet-client.toml 中关闭后再连接。\n\n"
+        + "This server has no ZstdNet backend. Ask the admin to install it, or disable ZstdNet on the client.";
+    private static final String DISCONNECT_UNREACHABLE =
+        "ZstdNet：无法连接到服务器。\n\n"
+        + "服务器可能已离线，或地址 / 端口填写有误。\n\n"
+        + "ZstdNet could not reach the server (it may be offline, or the address/port is wrong).";
 
     public enum Mode {
         AUTO,
@@ -457,7 +472,14 @@ public final class LocalZstdNet {
                 remotePort,
                 level
             );
-            upstream.connect(new InetSocketAddress(remoteHost, remotePort), 5000);
+            try {
+                upstream.connect(new InetSocketAddress(remoteHost, remotePort), 5000);
+            } catch (IOException connectErr) {
+                // 后端拨号失败：给登录态客户端一个明确原因，而不是原版无原因的「连接中断」。
+                LOGGER.warn("zstdnet: ZSTD upstream connect failed {}:{}: {}", remoteHost, remotePort, connectErr.toString());
+                LoginDisconnect.trySend(client.getOutputStream(), DISCONNECT_UNREACHABLE);
+                return;
+            }
             upstream.setTcpNoDelay(true);
             upstream.setSoTimeout(0);
             LOGGER.info(
@@ -503,12 +525,18 @@ public final class LocalZstdNet {
                 }
             });
 
+            // 探测对端是否真的会说 ZSTD：登录阶段若一个有效解压字节都没收到（首帧非 zstd 帧 / 直接 EOF），
+            // 几乎可断定对端没有 ZstdNet 服务端。此时合成一个登录断开包给客户端（见下方 finally），替代无原因的「连接中断」。
+            // 一旦透传过任意有效字节就锁死该标记：之后即便对端发来的是正常的服务端断开，也原样透传、绝不再覆盖。
+            final AtomicBoolean producedAny = new AtomicBoolean(false);
             Future<?> downstreamWriter = WORKERS.submit(() -> {
+                OutputStream clientOut = null;
                 try (ZstdInputStream zstdIn = ZstdStreams.newDecompressor(
                     new CountingInputStream(upstream.getInputStream(), stats::addServerToClientZstd),
                     options,
                     clientDict
                 )) {
+                    clientOut = new CountingOutputStream(client.getOutputStream(), stats::addServerToClientRaw);
                     // 启用变换 / CRC 时套上逆向包装；各层 MAGIC 自检：服务端实际未用该层则原样透传，不破坏字节。
                     // CRC 在最外层（与服务端编码端 CRC-在-zstd-之前 对称）；CRC 与实体变换服务端互斥，故至多一层生效、另一层透传。
                     InputStream downstream = zstdIn;
@@ -519,9 +547,21 @@ public final class LocalZstdNet {
                         downstream = new CacheUntransformingInputStream(
                             downstream, ChunkCacheFormat.DEFAULT_CACHE_BYTES, warmSnapshot, cacheStore, stats.cacheStats);
                     }
-                    StreamTransfer.copyAndFlush(downstream, new CountingOutputStream(client.getOutputStream(), stats::addServerToClientRaw));
+                    byte[] buf = new byte[16 * 1024];
+                    int n;
+                    while ((n = downstream.read(buf)) >= 0) {
+                        if (n > 0) {
+                            producedAny.set(true);
+                            clientOut.write(buf, 0, n);
+                            clientOut.flush();
+                        }
+                    }
                 } catch (Exception ignored) {
                 } finally {
+                    if (clientOut != null && !producedAny.get()) {
+                        // 整条下行从未产出有效字节 -> 对端不会说 ZSTD（或刚连上就被拒）。给客户端一个明确原因。
+                        LoginDisconnect.trySend(clientOut, DISCONNECT_NO_BACKEND);
+                    }
                     try {
                         client.shutdownOutput();
                     } catch (Exception ignored) {

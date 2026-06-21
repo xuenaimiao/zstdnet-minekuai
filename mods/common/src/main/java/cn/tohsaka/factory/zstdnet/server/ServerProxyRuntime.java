@@ -36,6 +36,7 @@ import cn.tohsaka.factory.zstdnet.core.io.CountingInputStream;
 import cn.tohsaka.factory.zstdnet.core.io.CountingOutputStream;
 import cn.tohsaka.factory.zstdnet.core.limit.TokenBucketLimiter;
 import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
+import cn.tohsaka.factory.zstdnet.core.protocol.LoginDisconnect;
 import cn.tohsaka.factory.zstdnet.core.protocol.PacketIo;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
@@ -1229,61 +1230,13 @@ final class ServerProxyRuntime {
         }
 
         try {
-            OutputStream out = clientSocket.getOutputStream();
-            byte[] packet = buildLoginDisconnectPacket(message);
-            out.write(packet);
-            out.flush();
+            // 登录态断开包编码集中在 core.protocol.LoginDisconnect（客户端本地代理也复用同一份）。
+            if (!LoginDisconnect.trySend(clientSocket.getOutputStream(), message)) {
+                LOGGER.debug("[server] failed to send raw-login disconnect packet");
+            }
         } catch (IOException e) {
             LOGGER.debug("[server] failed to send raw-login disconnect packet: {}", e.toString());
         }
-    }
-
-    private byte[] buildLoginDisconnectPacket(String message) throws IOException {
-        byte[] componentJson = buildTextComponentJson(message).getBytes(StandardCharsets.UTF_8);
-        byte[] packetId = VarIntCodec.encode(0);
-        byte[] componentLength = VarIntCodec.encode(componentJson.length);
-
-        byte[] payload = new byte[packetId.length + componentLength.length + componentJson.length];
-        int offset = 0;
-        System.arraycopy(packetId, 0, payload, offset, packetId.length);
-        offset += packetId.length;
-        System.arraycopy(componentLength, 0, payload, offset, componentLength.length);
-        offset += componentLength.length;
-        System.arraycopy(componentJson, 0, payload, offset, componentJson.length);
-
-        byte[] packetLength = VarIntCodec.encode(payload.length);
-        byte[] packet = new byte[packetLength.length + payload.length];
-        System.arraycopy(packetLength, 0, packet, 0, packetLength.length);
-        System.arraycopy(payload, 0, packet, packetLength.length, payload.length);
-        return packet;
-    }
-
-    private String buildTextComponentJson(String text) {
-        return "{\"text\":\"" + escapeJson(text) + "\"}";
-    }
-
-    private String escapeJson(String text) {
-        StringBuilder builder = new StringBuilder(text.length() + 16);
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            switch (ch) {
-                case '\\' -> builder.append("\\\\");
-                case '"' -> builder.append("\\\"");
-                case '\b' -> builder.append("\\b");
-                case '\f' -> builder.append("\\f");
-                case '\n' -> builder.append("\\n");
-                case '\r' -> builder.append("\\r");
-                case '\t' -> builder.append("\\t");
-                default -> {
-                    if (ch < 0x20) {
-                        builder.append(String.format(Locale.ROOT, "\\u%04x", (int) ch));
-                    } else {
-                        builder.append(ch);
-                    }
-                }
-            }
-        }
-        return builder.toString();
     }
 
     private String ipString(byte[] data, int offset, int len) throws IOException {
