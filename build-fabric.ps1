@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('1.20.1', '1.21.1', '26.1')]
+    [ValidateSet('1.19.3', '1.20.1', '1.21.1', '26.1')]
     [string]$MinecraftVersion = '1.21.1'
 )
 
@@ -13,6 +13,7 @@ $projectDir = Join-Path $repoRoot "mods\$MinecraftVersion\zstdnet-fabric"
 
 # Per-MC-version JDK + Gradle distribution (26.1 is un-obfuscated: needs JDK 25 + Gradle 9.x + new Loom)
 switch ($MinecraftVersion) {
+    '1.19.3' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
     '1.20.1' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
     '1.21.1' { $javaHome = 'C:\Program Files\Java\jdk-21'; $gradleDir = 'tools\gradle-8.8' }
     '26.1'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }

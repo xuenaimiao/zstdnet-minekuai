@@ -38,6 +38,7 @@ Existing variants (templates):
 ```
 mods/1.18.2/zstdnet-forge        Forge 1.18.2      JDK 17   coremods
 mods/1.19.2/zstdnet-forge        Forge 1.19.2      JDK 17   coremods
+mods/1.19.3/zstdnet-fabric       Fabric 1.19.3     JDK 17   mixins   (pre-1.19.4 GUI; see §12)
 mods/1.20.1/zstdnet-forge        Forge 1.20.1      JDK 17   coremods
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1   JDK 17   coremods, BORROWS forge's integration layer (see §7b)
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1     JDK 17   mixins
@@ -381,3 +382,46 @@ in 1.18.2 → dedup by iterating `for (i<size()) get(int)` comparing `.ip`, and 
 1.18.2↔1.19.2↔1.20.1; `ConnectScreen.startConnecting` is the 4-arg form (the `isQuickPlay` boolean is
 1.20+), matching the 1.19.2 descriptor. (`new ResourceLocation(String, String)` is merely deprecated
 in 1.18.2 — a warning, not an error.)
+
+---
+
+## 12. Minecraft 1.19.3 (Fabric) — back-port deltas
+
+Reference variant: `mods/1.19.3/zstdnet-fabric` (template = `mods/1.20.1/zstdnet-fabric`). 1.19.3 sits
+**between two GUI-API generations** and differs subtly from *both* neighbors — don't blindly copy from
+either:
+- **vs 1.19.2:** 1.19.3 (22w42a) made `AbstractWidget.x/y` **private** and added
+  `getX()/getY()/setX()/setY()`. So 1.19.2's public `.x`/`.y` field access does **not** compile on 1.19.3 —
+  use the getters (same as 1.20.1). (The 1.19.2 *Forge* variant still uses the public fields; that's the trap.)
+- **vs 1.20.1:** 1.19.3 still renders with **`PoseStack`** (not `GuiGraphics`, which is 1.20) and has **no**
+  `Tooltip` / `EditBox.setHint` / `CommonInputs` (all part of the 1.19.4 widget rework).
+
+Toolchain is the same as the other JDK-17 Fabric variants (**JDK 17, Gradle 8.8, Loom 1.7.4**).
+`gradle.properties` → `loader_version=0.16.10`, `fabric_api_version=0.76.1+1.19.3`; `pack.mcmeta` →
+`"pack_format": 12`; `fabric.mod.json` keeps `"java": ">=17"` + `minecraft "~1.19.3"`; `zstdnet.mixins.json`
+stays `compatibilityLevel "JAVA_17"`. The whole `mods/common` core compiles unchanged.
+
+**Only 3 files needed edits vs the 1.20.1 Fabric template; everything else copies verbatim:**
+- **Rendering → `PoseStack`** (`client/ClientProxyPublisher`, `mixin/ShareToLanScreenMixin`):
+  `GuiGraphics gui` → `PoseStack gui`; `gui.fill(...)` → `GuiComponent.fill(gui, ...)`;
+  `gui.drawString(font, …)` → `font.drawShadow(gui, …)`. The `HudRenderCallback` callback and the
+  `Screen.render` mixin take `PoseStack` (`render(Lcom/mojang/blaze3d/vertex/PoseStack;IIF)V`).
+- **No widget Tooltip/hint/CommonInputs** (those are 1.19.4): drop `EditBox.setHint` /
+  `setTooltip(Tooltip.create(...))` / `setFocused`; replace `CommonInputs.selected(keyCode)` with
+  `keyCode == 257 || keyCode == 335`. **Keep** `getX()/getY()/getWidth()/getHeight()` (all present in 1.19.3).
+- **`ConnectScreen.startConnecting` is 4-arg** (no `quickPlay` — that's 1.20+): drop the trailing arg at
+  both call sites in `ClientProxyPublisher` and in `ConnectScreenMixin`'s `@ModifyVariable method=`
+  descriptor + handler signature.
+- **`ServerGamePacketListenerImpl` has no `getRemoteAddress()`** in 1.19.3 (`server/ServerProxyBootstrap`):
+  read it off the underlying `Connection` via the existing accessor —
+  `((ServerGamePacketListenerImplAccessor) player.connection).zstdnet$getConnection().getRemoteAddress()`.
+
+*Unchanged / verbatim:* all server/network/auth/coremod-hook files; the accessors (`gameProfile` +
+`connection` fields exist); `ConnectionMixin`, `ClientIntentionPacketMixin`, `DedicatedServerMixin`
+(`initServer` STORE), `MinecraftServerMixin` (`getCompressionThreshold`),
+`ServerHandshakePacketListenerImplMixin` (`handleIntention`), `PlayerTabOverlayMixin` (`render` redirect —
+the `isEncrypted` TAB-head gate exists since 1.19.1). `HttpUtil.isPortAvailable` **is** available in 1.19.3
+(it was added in 1.19.3; only the older 1.19.2 Forge variant has to work around its absence). The two
+`@Mixin target … ContainerEventHandler/Screen … not found in environment type SERVER` WARNs on a dedicated
+server are expected (client-only mixins listed in the common section) and harmless. Build (10-variant) green
++ shared unit tests pass; dedicated-server runtime startup verified (auto-takeover + threshold override apply).
