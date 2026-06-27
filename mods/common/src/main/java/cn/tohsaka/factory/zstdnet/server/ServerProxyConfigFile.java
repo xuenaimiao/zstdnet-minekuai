@@ -50,6 +50,7 @@ public final class ServerProxyConfigFile {
         "auto_takeover",
         "listen",
         "target",
+        "lan_compression",
         "voice_chat_passthrough",
         "voice_chat_listen",
         "voice_chat_target",
@@ -138,6 +139,15 @@ public final class ServerProxyConfigFile {
 
     public static int readTargetPort() {
         return parsePort(loadProperties().getProperty("target", "127.0.0.1:" + DEFAULT_BACKEND_PORT), DEFAULT_BACKEND_PORT);
+    }
+
+    /**
+     * 「开放到局域网」的存档主机是否启用 zstd 压缩代理。默认 {@code false}：局域网走原版直连，
+     * 体验与不装 mod 一致；仅 FRP/内网穿透等「把开放到局域网的存档经隧道转发并压缩」的场景才设为 true。
+     * 对专用服无影响（专用服始终压缩）。
+     */
+    public static boolean readLanCompression() {
+        return Boolean.parseBoolean(loadProperties().getProperty("lan_compression", "false").trim());
     }
 
     public static int readVoiceListenPort() {
@@ -293,6 +303,7 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("auto_takeover", "true");
         props.putIfAbsent("listen", DEFAULT_LISTEN_HOST + ":" + DEFAULT_ZSTD_PORT);
         props.putIfAbsent("target", DEFAULT_TARGET_HOST + ":" + DEFAULT_BACKEND_PORT);
+        props.putIfAbsent("lan_compression", "false");
         props.putIfAbsent("voice_chat_passthrough", "true");
         props.putIfAbsent("voice_chat_listen", DEFAULT_VOICE_CHAT_LISTEN);
         props.putIfAbsent("voice_chat_target", defaultVoiceChatTarget());
@@ -387,6 +398,14 @@ public final class ServerProxyConfigFile {
 
         appendLine(builder, "# 后端 Minecraft 目标地址。示例：127.0.0.1:25566", lineSeparator);
         appendLine(builder, "target=" + props.getProperty("target"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 「开放到局域网」的存档主机是否启用 zstd 压缩代理。默认 false。", lineSeparator);
+        appendLine(builder, "# 局域网带宽充裕、压缩无收益，默认关闭后「开放到局域网」走纯原版直连，", lineSeparator);
+        appendLine(builder, "# 别的客户端能在多人列表里看到并直接进服，体验与不装 mod 一致。", lineSeparator);
+        appendLine(builder, "# 仅当你要把「开放到局域网」的存档经 FRP/内网穿透隧道转发并压缩时，才设为 true。", lineSeparator);
+        appendLine(builder, "# 对专用服无影响（专用服始终启用压缩，与此项无关）。", lineSeparator);
+        appendLine(builder, "lan_compression=" + props.getProperty("lan_compression"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# ===== 内置正版（online-mode）账号验证 =====", lineSeparator);

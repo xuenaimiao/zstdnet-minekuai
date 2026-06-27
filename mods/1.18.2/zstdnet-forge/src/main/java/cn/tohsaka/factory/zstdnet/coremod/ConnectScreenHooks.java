@@ -23,6 +23,7 @@ import cn.tohsaka.factory.zstdnet.ClientConfig;
 import cn.tohsaka.factory.zstdnet.core.compress.ClientDictionaryStore;
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
+import cn.tohsaka.factory.zstdnet.proxy.ConnectTargets;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.multiplayer.ServerData;
@@ -78,6 +79,11 @@ public final class ConnectScreenHooks {
         String remoteAddr = host + ":" + original.getPort();
         ResolvedServerAddress resolved = ServerNameResolver.DEFAULT.resolveAddress(original).orElse(null);
         if (resolved == null) {
+            return original;
+        }
+
+        // 局域网/本机/私网目标：默认直连，不接管（与 ClientProxyPublisher.connect 一致）。
+        if (ConnectTargets.isDirectLanTarget(resolved.asInetSocketAddress()) && !ClientConfig.compressLan()) {
             return original;
         }
 

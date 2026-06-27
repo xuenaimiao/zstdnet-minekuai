@@ -25,6 +25,7 @@ import cn.tohsaka.factory.zstdnet.core.compress.ClientDictionaryStore;
 import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.Branding;
+import cn.tohsaka.factory.zstdnet.proxy.ConnectTargets;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyConfigFile;
@@ -580,6 +581,17 @@ public final class ClientProxyPublisher {
             LOGGER.warn("zstdnet: failed to resolve remote target {}", remoteAddr);
             return false;
         }
+
+        // 局域网 / 本机 / 私网目标：默认直连，不起压缩代理（局域网带宽充裕、压缩无收益，
+        // 体验与不装 mod 一致）。仅当 compress_lan 显式开启（FRP/隧道场景）才照常压缩。
+        if (remote.directLan() && !ClientConfig.compressLan()) {
+            serverData.ip = remoteAddr;
+            LOGGER.info("zstdnet: LAN/loopback target {} -> direct connection (compression off)", remoteAddr);
+            ConnectScreenHooks.setBypass(true);
+            ConnectScreen.startConnecting(parent, Minecraft.getInstance(), ServerAddress.parseString(remoteAddr), serverData);
+            return true;
+        }
+
         LocalZstdNet.ProxyHandle proxy;
 
         try {
@@ -899,7 +911,8 @@ public final class ClientProxyPublisher {
             connectHost,
             resolved.getPort(),
             connectHost,
-            resolved.getPort()
+            resolved.getPort(),
+            ConnectTargets.isDirectLanTarget(resolved.asInetSocketAddress())
         );
     }
 
@@ -1099,6 +1112,12 @@ public final class ClientProxyPublisher {
         ShareToLanState existing = getShareToLanState(screen);
         if (existing != null) {
             event.removeListener(existing.zstdPortEdit);
+        }
+
+        // 局域网默认直连：不注入 Zstd 端口框，「开放到局域网」保持纯原版界面。
+        // 仅当 compress_lan 显式开启（FRP/隧道场景）时才提供 zstd 端口。
+        if (!ClientConfig.compressLan()) {
+            return null;
         }
 
         EditBox backendPortEdit = findBackendPortEdit(listeners, screen);
@@ -1391,6 +1410,6 @@ public final class ClientProxyPublisher {
     private record PortValidation(int port, Component error) {
     }
 
-    private record RemoteTarget(String connectHost, int connectPort, String presentedHost, int presentedPort) {
+    private record RemoteTarget(String connectHost, int connectPort, String presentedHost, int presentedPort, boolean directLan) {
     }
 }

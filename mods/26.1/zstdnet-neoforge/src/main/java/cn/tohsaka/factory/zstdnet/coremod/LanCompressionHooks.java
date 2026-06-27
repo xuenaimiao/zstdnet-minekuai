@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet.coremod;
 
+import cn.tohsaka.factory.zstdnet.server.ServerProxyConfigFile;
 import net.minecraft.server.MinecraftServer;
 
 public final class LanCompressionHooks {
@@ -29,7 +30,8 @@ public final class LanCompressionHooks {
     }
 
     public static int resolveLanCompressionThreshold(MinecraftServer server) {
-        if (server != null && !server.isDedicatedServer() && server.isPublished()) {
+        if (server != null && !server.isDedicatedServer() && server.isPublished()
+            && ServerProxyConfigFile.readLanCompression()) {
             return LAN_THRESHOLD;
         }
         return VANILLA_THRESHOLD;

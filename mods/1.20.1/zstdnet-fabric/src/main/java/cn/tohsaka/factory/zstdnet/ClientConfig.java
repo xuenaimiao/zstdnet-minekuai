@@ -48,7 +48,17 @@ public final class ClientConfig {
     private static volatile boolean cacheEnabled = true;
     private static volatile boolean cachePersist = true;
     private static volatile long cachePersistBytes = 0L;
+    private static volatile boolean compressLan = false;
     private static volatile boolean initialized;
+
+    // compress_lan 由共享的 ClientCompressionConfig 之外单独解析（其 Parsed 记录不含该项，
+    // 且 mods/common 不改），首次写文件时把这段带注释的默认追加到共享模板末尾。
+    private static final String COMPRESS_LAN_CONFIG_BLOCK = """
+
+        # Compress LAN/loopback/private-IP targets too (for FRP/tunnel). Default off: LAN uses a plain
+        # direct connection, same as without the mod. Public servers always compress regardless.
+        compress_lan=false
+        """;
 
     private ClientConfig() {
     }
@@ -77,6 +87,14 @@ public final class ClientConfig {
             init();
         }
         return level;
+    }
+
+    /** 是否对局域网/本机/私网目标也启用压缩。默认 false：局域网走原版直连。 */
+    public static boolean compressLan() {
+        if (!initialized) {
+            init();
+        }
+        return compressLan;
     }
 
     public static CompressionOptions compression() {
@@ -119,7 +137,7 @@ public final class ClientConfig {
         try {
             Files.createDirectories(PATH.getParent());
             if (!Files.exists(PATH)) {
-                Files.writeString(PATH, ClientCompressionConfig.defaultConfigBody(), StandardCharsets.UTF_8);
+                Files.writeString(PATH, ClientCompressionConfig.defaultConfigBody() + COMPRESS_LAN_CONFIG_BLOCK, StandardCharsets.UTF_8);
                 return fallback;
             }
         } catch (IOException ignored) {
@@ -132,6 +150,8 @@ public final class ClientConfig {
         } catch (IOException ignored) {
             return fallback;
         }
+        String compressLanRaw = properties.getProperty("compress_lan");
+        compressLan = compressLanRaw != null && Boolean.parseBoolean(compressLanRaw.trim());
         return ClientCompressionConfig.parse(properties, PATH.getParent(), LOGGER);
     }
 }

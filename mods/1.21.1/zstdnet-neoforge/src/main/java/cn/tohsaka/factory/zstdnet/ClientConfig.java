@@ -36,6 +36,7 @@ public final class ClientConfig {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final ModConfigSpec.IntValue LEVEL;
+    private static final ModConfigSpec.BooleanValue COMPRESS_LAN;
     private static final ModConfigSpec.BooleanValue LONG_DISTANCE_MATCHING;
     private static final ModConfigSpec.IntValue WINDOW_LOG;
     private static final ModConfigSpec.ConfigValue<String> DICTIONARY;
@@ -50,6 +51,9 @@ public final class ClientConfig {
         LEVEL = builder
             .comment("zstd compression level for client->server stream")
             .defineInRange("level", 3, 1, 22);
+        COMPRESS_LAN = builder
+            .comment("Compress LAN/loopback/private-IP targets too (for FRP/tunnel). Default off: LAN uses a plain direct connection, same as without the mod. Public servers always compress regardless.")
+            .define("compress_lan", false);
         LONG_DISTANCE_MATCHING = builder
             .comment("Enable long-distance matching (better ratio on repetitive servers, more memory). Default off.")
             .define("long_distance_matching", false);
@@ -80,6 +84,11 @@ public final class ClientConfig {
 
     public static int getLevel() {
         return LEVEL.get();
+    }
+
+    /** 是否对局域网/本机/私网目标也启用压缩。默认 false：局域网走原版直连。 */
+    public static boolean compressLan() {
+        return COMPRESS_LAN.get();
     }
 
     public static CompressionOptions compression() {

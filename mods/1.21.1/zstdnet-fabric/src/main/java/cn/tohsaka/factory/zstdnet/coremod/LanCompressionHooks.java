@@ -19,6 +19,7 @@
 
 package cn.tohsaka.factory.zstdnet.coremod;
 
+import cn.tohsaka.factory.zstdnet.server.ServerProxyConfigFile;
 import net.minecraft.server.MinecraftServer;
 
 public final class LanCompressionHooks {
@@ -28,6 +29,9 @@ public final class LanCompressionHooks {
     }
 
     public static boolean shouldOverrideCompressionThreshold(MinecraftServer server) {
-        return server != null && !server.isDedicatedServer() && server.isPublished();
+        // 仅当「开放到局域网」的存档显式开启 lan_compression（FRP/隧道场景，给 zstd 让路）时，
+        // 才抬高阈值关掉原版 zlib；默认局域网走原版压缩，体验与不装 mod 一致。
+        return server != null && !server.isDedicatedServer() && server.isPublished()
+            && ServerProxyConfigFile.readLanCompression();
     }
 }

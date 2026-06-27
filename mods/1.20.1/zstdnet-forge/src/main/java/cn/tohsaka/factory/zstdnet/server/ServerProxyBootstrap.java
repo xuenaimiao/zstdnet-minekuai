@@ -131,6 +131,7 @@ public final class ServerProxyBootstrap {
         activeLanPort = -1;
         lastHudSyncMillis = 0L;
         RUNTIME.stop();
+        LanBroadcaster.stop();
         DedicatedServerAutoPort.clear();
     }
 
@@ -166,19 +167,34 @@ public final class ServerProxyBootstrap {
 
         if (published && lanPort > 0) {
             forceDisableLanAuthentication(server);
-            if (publishedLanPort != lanPort || RUNTIME.configChangedOnDisk()) {
+            boolean lanCompression = ServerProxyConfigFile.readLanCompression();
+            // configChangedOnDisk 依赖运行时已加载过配置的时间戳；代理未启动时不可靠，
+            // 故仅在运行中才用它触发热重载，避免默认(直连)路径每 tick 重入刷屏。
+            boolean needsRefresh = publishedLanPort != lanPort
+                || (RUNTIME.isRunning() && RUNTIME.configChangedOnDisk());
+            if (needsRefresh) {
                 publishedLanPort = lanPort;
                 if (RUNTIME.isRunning()) {
                     LOGGER.info("[zstdnet-server] config/LAN state changed, reloading proxy.");
                     RUNTIME.stop();
                 }
-                RUNTIME.startLan(lanPort);
-                activeLanPort = RUNTIME.isLanMode() ? lanPort : -1;
-                if (activeLanPort > 0) {
-                    notifyLanProxyReady(server, lanPort);
-                    LOGGER.info("[zstdnet-server] LAN world published on {}, zstd proxy armed.", lanPort);
+                if (lanCompression) {
+                    LanBroadcaster.stop();
+                    RUNTIME.startLan(lanPort);
+                    activeLanPort = RUNTIME.isLanMode() ? lanPort : -1;
+                    if (activeLanPort > 0) {
+                        notifyLanProxyReady(server, lanPort);
+                        LOGGER.info("[zstdnet-server] LAN world published on {}, zstd proxy armed (lan_compression=true).", lanPort);
+                    } else {
+                        LOGGER.warn("[zstdnet-server] LAN world published on {}, but zstd proxy did not start. Check zstdnet-server.properties.", lanPort);
+                    }
                 } else {
-                    LOGGER.warn("[zstdnet-server] LAN world published on {}, but zstd proxy did not start. Check zstdnet-server.properties.", lanPort);
+                    // 默认：局域网走原版直连，不起 zstd 代理（也就不会触发后端登录守卫），
+                    // 别的客户端能在多人列表里看到并直接进服，体验与不装 mod 一致。
+                    activeLanPort = -1;
+                    LOGGER.info("[zstdnet-server] LAN world published on {} — direct connection, ZstdNet compression disabled (LAN default). Set lan_compression=true in zstdnet-server.properties to compress it for FRP/tunnel.", lanPort);
+                    // 多网卡 LAN 广播：把原版 LAN ping 往每块网卡补发一遍，修「别的客户端在列表里搜不到」。
+                    LanBroadcaster.start(server.getMotd(), lanPort);
                 }
             }
             return;
@@ -188,6 +204,7 @@ public final class ServerProxyBootstrap {
             LOGGER.info("[zstdnet-server] LAN world is no longer published, stopping zstd proxy.");
             RUNTIME.stop();
         }
+        LanBroadcaster.stop();
         publishedLanPort = -1;
         activeLanPort = -1;
     }
