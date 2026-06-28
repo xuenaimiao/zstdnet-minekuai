@@ -1,0 +1,156 @@
+// ZstdNet — Forge 1.16.5 变体（最老变体：Java 8 硬墙 + ForgeGradle 5 + 跨 1.17 大重命名）。
+// 工具链与其它变体不同：ForgeFlower 反编译器跑在宿主 JVM，JDK16+ 会崩，故整套构建必须在 JDK 8 上跑
+// （Gradle 7.6.4 守护进程 + JDK 8）。详见仓库根 ADDING_A_VARIANT.md §13。
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net' }
+        mavenCentral()
+    }
+    dependencies {
+        classpath group: 'net.minecraftforge.gradle', name: 'ForgeGradle', version: '5.1.+', changing: true
+    }
+}
+
+plugins {
+    id 'eclipse'
+    id 'maven-publish'
+}
+apply plugin: 'net.minecraftforge.gradle'
+
+version = mod_version
+group = mod_group_id
+
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译。
+sourceSets {
+    main {
+        java.srcDir '../../common/src/main/java'
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
+// 1.16.5 例外：唯一 import net.minecraft.* 的 common 文件 DedicatedServerAutoPort 用的是 1.17 之后的
+// dedicated-server 签名（DedicatedServerProperties 单参构造、serverPort/serverIp 字段），1.16.5 不存在，
+// 故从本变体排除（同 Bukkit 插件做法），auto-port 逻辑由薄层 coremod/DedicatedAutoPortHooks 用 1.16.5 签名重写。
+sourceSets.main.java.exclude '**/server/DedicatedServerAutoPort.java'
+
+def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile
+def externalProjectBuildDir = new File(externalBuildRoot, "mods/${minecraft_version}/zstdnet-forge").canonicalFile
+
+layout.buildDirectory.set(externalProjectBuildDir)
+
+base {
+    archivesName = "zstdnet-${minecraft_version}-forge"
+}
+
+// 整套构建在 JDK 8 上跑（见文件头），故不用 java.toolchain；直接把源/目标字节码定为 1.8。
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+minecraft {
+    // ★ 1.16.5 必须用 MCP snapshot 映射，不能用 official：Forge 直到 1.17 才采用 Mojang 类名，
+    //   1.16.5 的 official 通道只给方法/字段名、不给类名（类名仍是混淆名）。20210309-1.16.5 是 1.16.5
+    //   最后一版 MCP snapshot（给出可读类名+方法/字段名）。故本变体的类名是 MCP 1.16.5 命名，
+    //   与其余 official-映射变体不同（这正是 1.16.5 薄层移植量大的根因）。
+    mappings channel: 'snapshot', version: '20210309-1.16.5'
+
+    runs {
+        client {
+            workingDirectory new File(externalProjectBuildDir, 'run')
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+        server {
+            workingDirectory new File(externalProjectBuildDir, 'run')
+            property 'forge.logging.console.level', 'debug'
+            args '--nogui'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
+}
+
+// 内嵌的 zstd-jni 以「普通资源 jar」放进最终 jar（见下方 stageEmbeddedZstd），不重定位、不进任何模块路径。
+// 1.16.5 Forge 没有 jarJar（1.18.2/Forge40 才加），且重定位会打断 JNI 原生绑定，故走 ZstdCodecs 内嵌资源方案。
+configurations {
+    embeddedZstd { transitive = false }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    // 编译期 + dev/test 运行期用原包名 com.github.luben.zstd（dev 下宿主即有 zstd，门面走宿主模式）。
+    implementation 'com.github.luben:zstd-jni:1.5.7-7'
+    // ★ 内嵌进最终 jar 的那份原始 zstd-jni（不重定位，保留 com.github.luben.zstd，原生方法才能绑定）。
+    embeddedZstd 'com.github.luben:zstd-jni:1.5.7-7'
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.slf4j:slf4j-api:2.0.9'
+}
+
+// 把原始 zstd-jni jar 暂存成资源：cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar。
+def embeddedZstdDir = layout.buildDirectory.dir('generated/embeddedZstd')
+def stageEmbeddedZstd = tasks.register('stageEmbeddedZstd', Copy) {
+    from configurations.embeddedZstd
+    into embeddedZstdDir.map { it.dir('cn/tohsaka/factory/zstdnet/embedded') }
+    rename '.*', 'zstd-jni.jar'
+}
+sourceSets.main.resources.srcDir(embeddedZstdDir)
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}
+
+processResources {
+    dependsOn stageEmbeddedZstd
+
+    def replaceProperties = [
+            mod_id: mod_id,
+            mod_name: mod_name,
+            mod_version: mod_version
+    ]
+    inputs.properties(replaceProperties)
+
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties
+    }
+}
+
+// 最终发布产物就是普通 mod jar：本模组类（reobf 到 SRG）+ 资源（含内嵌 zstd-jni.jar）。
+jar {
+    archiveClassifier = ''
+    destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Vendor'    : 'tohsaka',
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : archiveVersion,
+                'Implementation-Vendor'   : 'tohsaka'
+        ])
+    }
+}
+
+// FG5：把发布 jar 反混淆回 SRG（生产环境运行名）。reobfJar 默认就地重写 jar 产物。
+reobf {
+    jar {}
+}

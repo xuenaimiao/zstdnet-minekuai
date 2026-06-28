@@ -1,0 +1,6 @@
+{
+  "zstdnet_lan_compression_threshold": "coremods/zstdnet_lan_compression_threshold.js",
+  "zstdnet_connect_screen_intercept": "coremods/zstdnet_connect_screen_intercept.js",
+  "zstdnet_server_real_ip": "coremods/zstdnet_server_real_ip.js",
+  "zstdnet_tab_player_head": "coremods/zstdnet_tab_player_head.js"
+}

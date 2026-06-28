@@ -425,3 +425,85 @@ the `isEncrypted` TAB-head gate exists since 1.19.1). `HttpUtil.isPortAvailable`
 `@Mixin target … ContainerEventHandler/Screen … not found in environment type SERVER` WARNs on a dedicated
 server are expected (client-only mixins listed in the common section) and harmless. Build (10-variant) green
 + shared unit tests pass; dedicated-server runtime startup verified (auto-takeover + threshold override apply).
+
+## 13. Minecraft 1.16.5 (Forge) — the most expensive variant (Java-8 wall + cross-1.17 rename)
+
+Reference variant: `mods/1.16.5/zstdnet-forge` (template = `mods/1.18.2/zstdnet-forge`). This is **not** a
+3–5-file back-port like §11/§12 — it's the costliest variant in the repo, because **three walls stack**.
+Build it with `build-forge-1.16.5.ps1` (its own script — the toolchain is fundamentally different).
+
+**Wall 1 — Java 8 (decisive).** 1.16.5 runs Java 8 (class 52). The shared `mods/common` core therefore
+**must be Java-8 source** (records → final classes, text blocks → concat, `var`/arrow-switch/instanceof-patterns
+desugared, `String.isBlank`→`trim().isEmpty()`, `HttpClient`→`HttpURLConnection`, `List/Map/Set.of`→
+`Arrays`/`Collections`, `Files.read/writeString`/`readAllBytes`/`String.repeat`/`BAOS.writeBytes`/`HexFormat`
+all removed). That down-level is a **one-time, single-source** change: Java-8 source still compiles on
+JDK 17/21/25, so the other ten variants are unaffected — **do not fork a Java-8 copy of common.** ★ Lesson:
+keyword-grep misses Java 9+ usages; the only reliable gate is **compiling with a real JDK 8 `javac`**.
+
+**Wall 2 — a second, older toolchain.** ForgeGradle **5.1.+** (legacy `buildscript{}` + `apply plugin`),
+**Gradle 7.6.4**, **JDK 8 for the whole build** (FG5's ForgeFlower decompiler runs on the host JVM and crashes
+on JDK 16+, so `toolchain.of(8)` can't save you — the daemon itself must be JDK 8). Put a `gradle-7.6.4`
+dist at `zstdnet-build/tools/`. Two more 1.16.5-isms: **no `jarJar`** (FML added it in 1.18.2/Forge40), so
+zstd-jni is bundled as an **embedded resource jar** (`embeddedZstd` config → `stageEmbeddedZstd` Copy task →
+`cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar`) loaded at runtime through the `ZstdCodecs` reflective
+façade (same isolation pattern as the Mohist fix — never relocate; relocation breaks JNI binding); and the
+**`reobf { jar {} }`** step (FG5 reobfuscates the published jar back to SRG runtime names).
+
+**Wall 3 — MCP-snapshot mappings ⇒ every class name differs.** Forge only adopted Mojang **class** names in
+1.17; 1.16.5's `official` channel gives method/field names but **no class names**. So this variant uses
+`mappings channel: 'snapshot', version: '20210309-1.16.5'` (MCP). Consequence: unlike every other variant
+(which share official `net.minecraft.*` names and thus share `mods/common` verbatim), **1.16.5's thin layer
+uses MCP class names**, and SRG ids are `func_*`/`field_*` (not `m_*`/`f_*`). The core map (1.18.2 → 1.16.5):
+`Component`→`util.text.ITextComponent`, `TextComponent`→`StringTextComponent`, `TranslatableComponent`→
+`TranslationTextComponent`, `ChatFormatting`→`util.text.TextFormatting`, `ClickEvent/HoverEvent`→
+`util.text.event.*`, `Connection`→`network.NetworkManager`, `FriendlyByteBuf`→`network.PacketBuffer`
+(`readUtf`/`writeUtf`→`readString`/`writeString`), `ResourceLocation`→`util.ResourceLocation`,
+`ServerPlayer`→`entity.player.ServerPlayerEntity`, `player.connection`(`ServerGamePacketListenerImpl`)→
+`network.play.ServerPlayNetHandler` (its `.connection` field → `.netManager`), `ClientIntentionPacket`→
+`network.handshake.client.CHandshakePacket` (host in private field **`ip`**, read in `readPacketData`),
+`ServerHandshakePacketListenerImpl`→`network.handshake.ServerHandshakeNetHandler` (field `networkManager`,
+method `processHandshake`), `ConnectScreen`→`gui.screen.ConnectingScreen`, `EditBox`→`widget.TextFieldWidget`
+(`getText`/`setText`/`setMaxStringLength`), `AbstractWidget`→`widget.Widget` (public `x`/`y` fields),
+`GuiComponent`→`gui.AbstractGui`, `PlayerTabOverlay`→`gui.overlay.PlayerTabOverlayGui`. Methods: `getPort`→
+`getServerPort`, `isPublished`→`getPublic`, `getMotd`→`getMOTD`, `usesAuthentication`/`setUsesAuthentication`→
+`isServerInOnlineMode`/`setOnlineMode`, `isSingleplayer`→`isSinglePlayer`, `setupCompression(int,bool)`→
+`setCompressionThreshold(int)`, `disconnect(Component)` on a raw NetworkManager → `closeChannel(ITextComponent)`,
+`Util.NIL_UUID`→`util.Util.DUMMY_UUID`, `withStyle`→`modifyStyle`, rendering uses `blaze3d.matrix.MatrixStack`
+(not PoseStack). Forge networking is under `net.minecraftforge.fml.network.*`; lifecycle events are
+`fml.event.server.FMLServerStartedEvent/FMLServerStoppingEvent` + `fml.server.ServerLifecycleHooks`; GUI events
+are `client.event.GuiScreenEvent.*`/`GuiOpenEvent`/`RenderGameOverlayEvent`/`ClientPlayerNetworkEvent`.
+
+**Two structural deltas beyond pure renames:**
+- **`server/DedicatedServerAutoPort` (common) is `exclude`d** (`sourceSets.main.java.exclude
+  '**/server/DedicatedServerAutoPort.java'`, same as the Bukkit plugin) because it uses 1.17+ dedicated-server
+  signatures (`DedicatedServerProperties` single-arg ctor; `serverPort`/`serverIp` fields). Its logic is rewritten
+  in the thin layer as **`server/DedicatedAutoPortHooks`** (kept in the `server` package so it can reach the
+  package-private `DedicatedAutoPortState`/`AutoPortPlan`). 1.16.5's `ServerProperties` ctor is 2-arg
+  (`Properties, DynamicRegistries`) — reconstructing is painful — but it exposes `server-port`/`online-mode`/
+  `network-compression-threshold` as **`public final` instance fields**, so the hook **mutates those final fields
+  in place via reflection** (`setAccessible(true)+set` is legal on JDK 8 for non-static final instance fields) and
+  updates the backing `Properties` map, returning the same instance. `ServerProxyBootstrap` then calls
+  `DedicatedAutoPortState.activePlan()/.clear()` directly (not `DedicatedServerAutoPort.*`).
+- **Connection-intercept coremod retargeted.** 1.16.5 has no static `ConnectScreen.startConnecting`; both
+  `ConnectingScreen` constructors funnel into the private instance method **`connect(String ip, int port)`**
+  (verified: the `(Screen,Minecraft,ServerData)` ctor parses `serverData.serverIP`→`ServerAddress`→`getIP()`→
+  `connect`). The coremod injects at the head of `connect`, calls `ConnectScreenHooks.interceptConnect(String,int)`
+  →`ServerAddress`, then writes host/port back to locals 1/2 via the helper methods `ConnectScreenHooks.hostOf`/
+  `portOf` (so the coremod never has to emit a vanilla `getIP()/getPort()` whose SRG name is runtime-only —
+  those calls live in compiled, reobf'd Java instead). The dedicated-auto-port coremod (folded into
+  `zstdnet_lan_compression_threshold.js`) matches the `getProperties()` call inside `DedicatedServer.init()`
+  (`func_71197_b ()Z`) by **return descriptor** `()Lnet/minecraft/server/dedicated/ServerProperties;` + following
+  `ASTORE`, then injects `ALOAD0; SWAP; INVOKESTATIC DedicatedAutoPortHooks.prepareDedicatedServerProperties`.
+  `getNetworkCompressionThreshold` is `func_175577_aI ()I`; the real-IP and tab-head coremods are the §11 ones with
+  `Connection`→`NetworkManager`, `ClientIntentionPacket`→`CHandshakePacket`, `PacketBuffer.readString` = `func_150789_c`.
+
+**Round-1 scope cuts (intentional):** premium verification is **off** (`ForgePlatform.supportsPremiumVerification()`
+returns `false`; the two `PremiumAuth*Hooks` + `zstdnet_premium_auth.js` are deleted) — the `auth/*` common classes
+still ship but stay dormant. 1.16.5 has **no `RegisterClientCommandsEvent`**, so `/zstdhud` + `/zstdport` register
+via `RegisterCommandsEvent` (`net.minecraft.command.Commands`) — i.e. only on the integrated/LAN-host command
+dispatcher, not when connected to a remote dedicated server (a known limitation; the HUD itself still renders via
+`RenderGameOverlayEvent`).
+
+**Status:** `build` green on JDK 8 (Gradle 7.6.4 + FG5) — `compileJava` + shared unit tests + `reobfJar` + dist jar
+(`zstdnet-1.16.5-forge-<ver>.jar`, embedded zstd-jni, 4 coremods, reobf-to-SRG confirmed). No-regression: Forge
+1.20.1 still builds green on JDK 17 (common's Java-8 down-level compiles unchanged there). Runtime not yet smoke-tested.

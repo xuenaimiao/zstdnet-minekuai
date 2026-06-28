@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[36,)"
+license="MIT"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+description='''
+ZstdNet is a Minecraft Java Edition mod that compresses relayed traffic between clients and servers through a local or server-side ZSTD proxy, with the goal of significantly reducing public bandwidth usage in high-repetition data scenarios.
+It supports automatic dedicated-server port takeover, LAN host publishing, raw vanilla passthrough compatibility, and forwarded real-IP restoration.
+'''
+
+[[dependencies.${mod_id}]]
+modId="forge"
+mandatory=true
+versionRange="[36,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.16.5,1.17)"
+ordering="NONE"
+side="BOTH"
