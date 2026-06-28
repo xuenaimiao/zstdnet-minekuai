@@ -23,6 +23,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -73,7 +74,7 @@ public final class CacheUntransformingInputStream extends InputStream {
      * @param maxBytes 客户端会话内缓存字节预算（须与服务端一致，以保证同步淘汰 → REF 不 miss）。
      */
     public CacheUntransformingInputStream(InputStream in, long maxBytes) {
-        this(in, maxBytes, Map.of(), null, null);
+        this(in, maxBytes, Collections.emptyMap(), null, null);
     }
 
     /** 会话内缓存 + 跨会话持久化（v2 WARM_REF），无命中计数。 */
@@ -92,7 +93,7 @@ public final class CacheUntransformingInputStream extends InputStream {
                                           ChunkCacheStore store, CacheStats cacheStats) {
         this.in = in;
         this.cache = new LruByteCache(maxBytes);
-        this.warm = warm == null ? Map.of() : warm;
+        this.warm = warm == null ? Collections.emptyMap() : warm;
         this.store = store;
         this.cacheStats = cacheStats;
     }

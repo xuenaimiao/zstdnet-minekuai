@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -88,7 +89,7 @@ public final class CacheTransformingOutputStream extends OutputStream {
     }
 
     private static final int MAX_TRACKED_POSITIONS = 1 << 16;
-    private final Map<Long, PosState> positionMap = new LinkedHashMap<>(256, 0.75f, true) {
+    private final Map<Long, PosState> positionMap = new LinkedHashMap<Long, PosState>(256, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, PosState> eldest) {
             return size() > MAX_TRACKED_POSITIONS;
@@ -120,7 +121,7 @@ public final class CacheTransformingOutputStream extends OutputStream {
      * @param maxBytes 缓存字节预算（须与客户端一致，以保证同步淘汰）。
      */
     public CacheTransformingOutputStream(OutputStream out, CacheablePacketTable table, long maxBytes) {
-        this(out, table, maxBytes, Set.of(), ChunkCacheFormat.VERSION_REF, 0, false, 0);
+        this(out, table, maxBytes, Collections.emptySet(), ChunkCacheFormat.VERSION_REF, 0, false, 0);
     }
 
     /**
@@ -146,7 +147,7 @@ public final class CacheTransformingOutputStream extends OutputStream {
         this.out = out;
         this.table = table;
         this.cache = new LruByteCache(maxBytes);
-        this.clientWarm = clientWarm == null ? Set.of() : clientWarm;
+        this.clientWarm = clientWarm == null ? Collections.emptySet() : clientWarm;
         this.version = version;
         this.bypassWindow = Math.max(0, bypassWindow);
         this.patchEnabled = patchEnabled && version >= ChunkCacheFormat.VERSION_PATCH;
@@ -260,7 +261,7 @@ public final class CacheTransformingOutputStream extends OutputStream {
         byte[] stored = cache.peek(hi);
         if (stored != null
             && stored.length == frameLen
-            && Arrays.equals(stored, 0, stored.length, buf, frameStart, frameEnd)) {
+            && regionEquals(stored, 0, stored.length, buf, frameStart, frameEnd)) {
             cache.get(hi); // 与客户端 REF 解码的 get 同步触碰
             ChunkCacheCodec.writeRef(out, hi);
             refBlocks++;
@@ -357,6 +358,19 @@ public final class CacheTransformingOutputStream extends OutputStream {
             ps.lastHi = hi;
             ps.chain = 0;
         }
+    }
+
+    /** 比较 {@code a[aOff, aEnd)} 与 {@code b[bOff, bEnd)} 两个区间是否逐字节相等（替代 JDK9 的 {@code Arrays.equals} 六参版）。 */
+    private static boolean regionEquals(byte[] a, int aOff, int aEnd, byte[] b, int bOff, int bEnd) {
+        if (aEnd - aOff != bEnd - bOff) {
+            return false;
+        }
+        for (int i = 0, n = aEnd - aOff; i < n; i++) {
+            if (a[aOff + i] != b[bOff + i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** PATCH block 的线上字节数（用于估算相对 FULL 省下多少）：type(1)+base(8)+new(8)+varint(deltaLen)+delta。 */

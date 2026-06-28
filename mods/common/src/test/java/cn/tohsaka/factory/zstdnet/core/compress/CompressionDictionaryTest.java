@@ -58,7 +58,7 @@ class CompressionDictionaryTest {
         // 关键：用「默认」解码器（不调用 setLongMax）也能解出来，证明 windowLog≤27 对未升级客户端线兼容。
         byte[] decoded;
         try (ZstdInputStream in = new ZstdInputStream(new ByteArrayInputStream(frame))) {
-            decoded = in.readAllBytes();
+            decoded = readAll(in);
         }
         assertArrayEquals(data, decoded);
         // LDM 帧不带字典，dict id 为 0
@@ -86,7 +86,7 @@ class CompressionDictionaryTest {
         assertEquals(dictId, ZstdStreams.peekFrameDictId(pin));
         byte[] decoded;
         try (InputStream in = ZstdStreams.newDecompressor(pin, options, dictionary)) {
-            decoded = in.readAllBytes();
+            decoded = readAll(in);
         }
         assertArrayEquals(data, decoded);
     }
@@ -159,9 +159,10 @@ class CompressionDictionaryTest {
         }
 
         // 3 条连接 × 8 块 = 24 个样本文件（≥ ZDICT 下限 12），应能训出有效字典。
-        try (var stream = java.nio.file.Files.newDirectoryStream(samplesDir, "*.bin")) {
+        try (java.nio.file.DirectoryStream<java.nio.file.Path> stream =
+                 java.nio.file.Files.newDirectoryStream(samplesDir, "*.bin")) {
             int files = 0;
-            for (var ignored : stream) {
+            for (java.nio.file.Path ignored : stream) {
                 files++;
             }
             assertTrue(files >= 12, "chunked sampling should yield enough samples from a few connections, got " + files);
@@ -192,9 +193,21 @@ class CompressionDictionaryTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (int i = 0; i < rows; i++) {
             String line = "minecraft:stone#" + (i % 64) + ";create:cogwheel;entityMove(" + (i % 128) + ");blockUpdate\n";
-            out.writeBytes(line.getBytes(StandardCharsets.UTF_8));
+            byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
+            out.write(bytes, 0, bytes.length);
         }
         return out.toByteArray();
+    }
+
+    /** Java 8 兼容：替代 InputStream.readAllBytes（Java 9）。 */
+    private static byte[] readAll(InputStream in) throws java.io.IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) >= 0) {
+            bos.write(buf, 0, n);
+        }
+        return bos.toByteArray();
     }
 
     private static byte[] trainDictionary() {

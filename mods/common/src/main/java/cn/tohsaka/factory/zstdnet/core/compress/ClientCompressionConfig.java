@@ -24,6 +24,7 @@ import cn.tohsaka.factory.zstdnet.core.transform.TransformOptions;
 import org.slf4j.Logger;
 
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.Properties;
 
 /**
@@ -49,8 +50,76 @@ public final class ClientCompressionConfig {
      * @param cachePersist      是否跨会话落盘持久化（关掉则仅会话内 REF）
      * @param cachePersistBytes 持久缓存字节预算（{@code <=0} 表示用内置默认）
      */
-    public record Parsed(int level, CompressionOptions compression, TransformOptions transform,
-                         boolean cacheEnabled, boolean cachePersist, long cachePersistBytes) {
+    public static final class Parsed {
+        private final int level;
+        private final CompressionOptions compression;
+        private final TransformOptions transform;
+        private final boolean cacheEnabled;
+        private final boolean cachePersist;
+        private final long cachePersistBytes;
+
+        public Parsed(int level, CompressionOptions compression, TransformOptions transform,
+                      boolean cacheEnabled, boolean cachePersist, long cachePersistBytes) {
+            this.level = level;
+            this.compression = compression;
+            this.transform = transform;
+            this.cacheEnabled = cacheEnabled;
+            this.cachePersist = cachePersist;
+            this.cachePersistBytes = cachePersistBytes;
+        }
+
+        public int level() {
+            return this.level;
+        }
+
+        public CompressionOptions compression() {
+            return this.compression;
+        }
+
+        public TransformOptions transform() {
+            return this.transform;
+        }
+
+        public boolean cacheEnabled() {
+            return this.cacheEnabled;
+        }
+
+        public boolean cachePersist() {
+            return this.cachePersist;
+        }
+
+        public long cachePersistBytes() {
+            return this.cachePersistBytes;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof Parsed)) {
+                return false;
+            }
+            Parsed other = (Parsed) o;
+            return this.level == other.level
+                && this.cacheEnabled == other.cacheEnabled
+                && this.cachePersist == other.cachePersist
+                && this.cachePersistBytes == other.cachePersistBytes
+                && Objects.equals(this.compression, other.compression)
+                && Objects.equals(this.transform, other.transform);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(level, compression, transform, cacheEnabled, cachePersist, cachePersistBytes);
+        }
+
+        @Override
+        public String toString() {
+            return "Parsed[level=" + level + ", compression=" + compression + ", transform=" + transform
+                + ", cacheEnabled=" + cacheEnabled + ", cachePersist=" + cachePersist
+                + ", cachePersistBytes=" + cachePersistBytes + "]";
+        }
     }
 
     /**
@@ -95,47 +164,47 @@ public final class ClientCompressionConfig {
 
     /** 首次生成 {@code zstdnet-client.toml} 时写入的带注释模板。 */
     public static String defaultConfigBody() {
-        return """
-            # ZstdNet client config
-            # zstd compression level for the local client proxy (1-22)
-            level=%d
-
-            # Long-distance matching (LDM): better ratio for highly repetitive servers,
-            # at the cost of extra per-connection memory. Default off.
-            # Only enable window_log > 27 if the target server also uses it.
-            long_distance_matching=false
-            # LDM window as a power-of-two exponent. 0 = conservative default (24, ~16MiB).
-            window_log=0
-
-            # Trained dictionary file name under config/zstdnet/dict/ (or an absolute path).
-            # Leave empty to disable. Only set this when the SERVER you connect to ships the
-            # SAME dictionary file (ask the server admin); otherwise the connection will fail.
-            dictionary=
-
-            # Entity packet-stream transform: de-interleaves entity move/metadata fields before zstd
-            # for much better ratio in entity-heavy scenes. Only takes effect if the SERVER also enables
-            # it; safe and byte-identical against servers that don't (auto passthrough). Default off.
-            transform=false
-
-            # Chunk reference cache (CRC): de-duplicates repeated chunk data before zstd (8-byte REF tokens
-            # for chunks you already hold). Only takes effect if the SERVER also enables it (chunk_cache=
-            # auto/ref/full); safe and byte-identical against servers that don't. Default on.
-            chunk_cache=true
-            # Persist full chunks to disk (config/zstdnet-cache/<server>/) so reconnecting can replay
-            # already-held chunks (WARM_REF) across sessions. Off = in-session de-dup only. Default on.
-            chunk_cache_persist=true
-            # Disk+memory budget for the cross-session cache, in MiB (per server). Default %d.
-            chunk_cache_persist_mb=%d
-            """.formatted(DEFAULT_LEVEL, DEFAULT_CACHE_PERSIST_MB, DEFAULT_CACHE_PERSIST_MB);
+        return String.format(
+            "# ZstdNet client config\n"
+            + "# zstd compression level for the local client proxy (1-22)\n"
+            + "level=%d\n"
+            + "\n"
+            + "# Long-distance matching (LDM): better ratio for highly repetitive servers,\n"
+            + "# at the cost of extra per-connection memory. Default off.\n"
+            + "# Only enable window_log > 27 if the target server also uses it.\n"
+            + "long_distance_matching=false\n"
+            + "# LDM window as a power-of-two exponent. 0 = conservative default (24, ~16MiB).\n"
+            + "window_log=0\n"
+            + "\n"
+            + "# Trained dictionary file name under config/zstdnet/dict/ (or an absolute path).\n"
+            + "# Leave empty to disable. Only set this when the SERVER you connect to ships the\n"
+            + "# SAME dictionary file (ask the server admin); otherwise the connection will fail.\n"
+            + "dictionary=\n"
+            + "\n"
+            + "# Entity packet-stream transform: de-interleaves entity move/metadata fields before zstd\n"
+            + "# for much better ratio in entity-heavy scenes. Only takes effect if the SERVER also enables\n"
+            + "# it; safe and byte-identical against servers that don't (auto passthrough). Default off.\n"
+            + "transform=false\n"
+            + "\n"
+            + "# Chunk reference cache (CRC): de-duplicates repeated chunk data before zstd (8-byte REF tokens\n"
+            + "# for chunks you already hold). Only takes effect if the SERVER also enables it (chunk_cache=\n"
+            + "# auto/ref/full); safe and byte-identical against servers that don't. Default on.\n"
+            + "chunk_cache=true\n"
+            + "# Persist full chunks to disk (config/zstdnet-cache/<server>/) so reconnecting can replay\n"
+            + "# already-held chunks (WARM_REF) across sessions. Off = in-session de-dup only. Default on.\n"
+            + "chunk_cache_persist=true\n"
+            + "# Disk+memory budget for the cross-session cache, in MiB (per server). Default %d.\n"
+            + "chunk_cache_persist_mb=%d\n",
+            DEFAULT_LEVEL, DEFAULT_CACHE_PERSIST_MB, DEFAULT_CACHE_PERSIST_MB);
     }
 
     private static String trimmed(Properties props, String key, String fallback) {
         String raw = props.getProperty(key);
-        return raw == null || raw.isBlank() ? fallback : raw.trim();
+        return raw == null || raw.trim().isEmpty() ? fallback : raw.trim();
     }
 
     private static int parseInt(String raw, int fallback) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return fallback;
         }
         try {

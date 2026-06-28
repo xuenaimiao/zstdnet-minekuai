@@ -168,13 +168,16 @@ public final class DeltaCodec {
 
     private static void writeCopy(ByteArrayOutputStream out, int srcOff, int len) {
         out.write(OP_COPY);
-        out.writeBytes(VarIntCodec.encode(srcOff));
-        out.writeBytes(VarIntCodec.encode(len));
+        byte[] srcOffBytes = VarIntCodec.encode(srcOff);
+        out.write(srcOffBytes, 0, srcOffBytes.length);
+        byte[] lenBytes = VarIntCodec.encode(len);
+        out.write(lenBytes, 0, lenBytes.length);
     }
 
     private static void writeInsert(ByteArrayOutputStream out, byte[] src, int off, int len) {
         out.write(OP_INSERT);
-        out.writeBytes(VarIntCodec.encode(len));
+        byte[] lenBytes = VarIntCodec.encode(len);
+        out.write(lenBytes, 0, lenBytes.length);
         out.write(src, off, len);
     }
 

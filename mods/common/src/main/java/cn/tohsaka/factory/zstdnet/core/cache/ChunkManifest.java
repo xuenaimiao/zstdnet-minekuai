@@ -51,9 +51,10 @@ public final class ChunkManifest {
         int count = Math.min(hashes.size(), ChunkCacheFormat.MAX_MANIFEST_ENTRIES);
         ByteArrayOutputStream out = new ByteArrayOutputStream(
             ChunkCacheFormat.MANIFEST_MAGIC.length + 1 + 5 + count * ChunkCacheFormat.HASH128_BYTES);
-        out.writeBytes(ChunkCacheFormat.MANIFEST_MAGIC);
+        out.write(ChunkCacheFormat.MANIFEST_MAGIC, 0, ChunkCacheFormat.MANIFEST_MAGIC.length);
         out.write(ChunkCacheFormat.MANIFEST_VERSION);
-        out.writeBytes(VarIntCodec.encode(count));
+        byte[] countBytes = VarIntCodec.encode(count);
+        out.write(countBytes, 0, countBytes.length);
         byte[] tmp = new byte[ChunkCacheFormat.HASH128_BYTES];
         int written = 0;
         for (Hash128 h : hashes) {
@@ -61,7 +62,7 @@ public final class ChunkManifest {
                 break;
             }
             h.writeBytes(tmp, 0);
-            out.writeBytes(tmp);
+            out.write(tmp, 0, tmp.length);
             written++;
         }
         return out.toByteArray();

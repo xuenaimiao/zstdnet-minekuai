@@ -25,7 +25,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.HexFormat;
+import java.util.Objects;
 
 /**
  * 「登录阶段正版验证」的线格式与协商常量（与加载器无关，放在 common 单一真源）。
@@ -74,7 +74,7 @@ public final class PremiumAuthProtocol {
      * Fabric 路线仍走 fabric-api 的 payload（其网络层会保留字节），不受此影响。
      */
     public static String channelPathWithServerId(String serverId) {
-        if (serverId == null || serverId.isBlank()) {
+        if (serverId == null || serverId.trim().isEmpty()) {
             throw new IllegalArgumentException("blank serverId");
         }
         return CHANNEL_PATH + "/" + serverId;
@@ -150,7 +150,14 @@ public final class PremiumAuthProtocol {
 
     /** 由 nonce 确定性推导出 {@code serverId}（小写 hex），两端一致。 */
     public static String serverIdFromNonce(byte[] nonce) {
-        return HexFormat.of().formatHex(nonce);
+        final char[] hexDigits = "0123456789abcdef".toCharArray();
+        StringBuilder sb = new StringBuilder(nonce.length * 2);
+        for (byte b : nonce) {
+            int v = b & 0xFF;
+            sb.append(hexDigits[v >>> 4]);
+            sb.append(hexDigits[v & 0x0F]);
+        }
+        return sb.toString();
     }
 
     /** 客户端→服务端的应答包：{@code [wireVersion][authenticated][sourceUtf]}。 */
@@ -190,7 +197,45 @@ public final class PremiumAuthProtocol {
      * @param authenticated 客户端是否成功完成 {@code joinServer}（即拥有有效正版会话）
      * @param source        验证来源标识（如 {@code mojang} / {@code yggdrasil}），仅用于日志/诊断
      */
-    public record Answer(boolean authenticated, String source) {
+    public static final class Answer {
+        private final boolean authenticated;
+        private final String source;
+
+        public Answer(boolean authenticated, String source) {
+            this.authenticated = authenticated;
+            this.source = source;
+        }
+
+        public boolean authenticated() {
+            return this.authenticated;
+        }
+
+        public String source() {
+            return this.source;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof Answer)) {
+                return false;
+            }
+            Answer other = (Answer) o;
+            return this.authenticated == other.authenticated && Objects.equals(this.source, other.source);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(this.authenticated, this.source);
+        }
+
+        @Override
+        public String toString() {
+            return "Answer[authenticated=" + this.authenticated + ", source=" + this.source + "]";
+        }
+
         public static final Answer UNAUTHENTICATED = new Answer(false, "");
     }
 }

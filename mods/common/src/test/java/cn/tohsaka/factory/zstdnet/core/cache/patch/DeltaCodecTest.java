@@ -90,8 +90,10 @@ class DeltaCodecTest {
         byte[] base = new byte[10];
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         delta.write(DeltaCodec.OP_COPY);
-        delta.writeBytes(VarIntCodec.encode(5));   // srcOff=5
-        delta.writeBytes(VarIntCodec.encode(100)); // len=100 → 5+100 > 10
+        byte[] srcOff = VarIntCodec.encode(5);   // srcOff=5
+        delta.write(srcOff, 0, srcOff.length);
+        byte[] copyLen = VarIntCodec.encode(100); // len=100 → 5+100 > 10
+        delta.write(copyLen, 0, copyLen.length);
         assertThrows(IOException.class, () -> DeltaCodec.apply(base, delta.toByteArray()));
     }
 
@@ -100,7 +102,8 @@ class DeltaCodecTest {
         byte[] base = new byte[10];
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         delta.write(DeltaCodec.OP_INSERT);
-        delta.writeBytes(VarIntCodec.encode(50)); // 声称 50 字面字节，但后面没有
+        byte[] insLen = VarIntCodec.encode(50); // 声称 50 字面字节，但后面没有
+        delta.write(insLen, 0, insLen.length);
         delta.write(1);
         delta.write(2);
         assertThrows(IOException.class, () -> DeltaCodec.apply(base, delta.toByteArray()));
@@ -118,7 +121,8 @@ class DeltaCodecTest {
         byte[] base = new byte[10];
         ByteArrayOutputStream delta = new ByteArrayOutputStream();
         delta.write(DeltaCodec.OP_COPY);
-        delta.writeBytes(VarIntCodec.encode(0)); // srcOff=0, 然后缺 len
+        byte[] srcOff = VarIntCodec.encode(0); // srcOff=0, 然后缺 len
+        delta.write(srcOff, 0, srcOff.length);
         assertThrows(IOException.class, () -> DeltaCodec.apply(base, delta.toByteArray()));
     }
 
@@ -140,11 +144,13 @@ class DeltaCodecTest {
             } else if (choice < 8) { // 跳过一段（删除）
                 i += 1 + rnd.nextInt(Math.max(1, (base.length - i) / 2 + 1));
             } else { // 插入随机字面量
-                out.writeBytes(randomBytes(rnd, 1 + rnd.nextInt(20)));
+                byte[] lit = randomBytes(rnd, 1 + rnd.nextInt(20));
+                out.write(lit, 0, lit.length);
             }
         }
         if (rnd.nextBoolean()) {
-            out.writeBytes(randomBytes(rnd, rnd.nextInt(40)));
+            byte[] tail = randomBytes(rnd, rnd.nextInt(40));
+            out.write(tail, 0, tail.length);
         }
         return out.toByteArray();
     }

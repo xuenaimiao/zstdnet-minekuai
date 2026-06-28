@@ -67,7 +67,7 @@ public final class LoginDisconnect {
      * @return 是否成功写出
      */
     public static boolean trySend(OutputStream out, String message) {
-        if (out == null || message == null || message.isBlank()) {
+        if (out == null || message == null || message.trim().isEmpty()) {
             return false;
         }
         try {
@@ -88,19 +88,34 @@ public final class LoginDisconnect {
         for (int i = 0; i < text.length(); i++) {
             char ch = text.charAt(i);
             switch (ch) {
-                case '\\' -> builder.append("\\\\");
-                case '"' -> builder.append("\\\"");
-                case '\b' -> builder.append("\\b");
-                case '\f' -> builder.append("\\f");
-                case '\n' -> builder.append("\\n");
-                case '\r' -> builder.append("\\r");
-                case '\t' -> builder.append("\\t");
-                default -> {
+                case '\\':
+                    builder.append("\\\\");
+                    break;
+                case '"':
+                    builder.append("\\\"");
+                    break;
+                case '\b':
+                    builder.append("\\b");
+                    break;
+                case '\f':
+                    builder.append("\\f");
+                    break;
+                case '\n':
+                    builder.append("\\n");
+                    break;
+                case '\r':
+                    builder.append("\\r");
+                    break;
+                case '\t':
+                    builder.append("\\t");
+                    break;
+                default: {
                     if (ch < 0x20) {
                         builder.append(String.format(Locale.ROOT, "\\u%04x", (int) ch));
                     } else {
                         builder.append(ch);
                     }
+                    break;
                 }
             }
         }

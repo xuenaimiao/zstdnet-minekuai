@@ -8,7 +8,6 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -103,7 +102,7 @@ class LocalZstdNetUdpPassthroughTest {
                 3,
                 LocalZstdNet.Mode.RAW
             ); DatagramSocket voiceMod = new DatagramSocket()) {
-                proxy.armVoicePorts("tunnel", List.of(voicePort));
+                proxy.armVoicePorts("tunnel", Arrays.asList(voicePort));
                 voiceMod.setSoTimeout(5000);
 
                 byte[] payload = "plasmo-voice-udp".getBytes(StandardCharsets.UTF_8);

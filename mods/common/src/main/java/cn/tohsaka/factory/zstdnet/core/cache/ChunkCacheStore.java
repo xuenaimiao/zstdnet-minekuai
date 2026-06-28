@@ -30,7 +30,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -109,7 +111,7 @@ public final class ChunkCacheStore {
      * WARM_REF，故即便 {@link #put} 期间淘汰了某条目，引用仍在、服务不失败。其键集即客户端要发的 manifest。
      */
     public synchronized Map<Hash128, byte[]> snapshotWarm() {
-        return Map.copyOf(entries);
+        return Collections.unmodifiableMap(new LinkedHashMap<>(entries));
     }
 
     /**
@@ -229,7 +231,7 @@ public final class ChunkCacheStore {
     /** 按预算从内存集合淘汰最久未写条目，返回被逐出键供调用方（异步或同步）删文件。 */
     private List<Hash128> evictToBudgetCollect() {
         List<Hash128> victims = null;
-        var it = entries.entrySet().iterator();
+        Iterator<Map.Entry<Hash128, byte[]>> it = entries.entrySet().iterator();
         while (curBytes > maxBytes && entries.size() > 1 && it.hasNext()) {
             Map.Entry<Hash128, byte[]> victim = it.next();
             it.remove();
@@ -239,7 +241,7 @@ public final class ChunkCacheStore {
             }
             victims.add(victim.getKey());
         }
-        return victims == null ? List.of() : victims;
+        return victims == null ? Collections.emptyList() : victims;
     }
 
     private static void submitIo(Runnable task) {

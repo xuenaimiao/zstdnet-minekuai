@@ -116,7 +116,7 @@ public final class ClientDictionaryStore {
     }
 
     private static long mappedDictId(Path configDir, String serverAddress) {
-        if (serverAddress == null || serverAddress.isBlank()) {
+        if (serverAddress == null || serverAddress.trim().isEmpty()) {
             return 0L;
         }
         String value = loadMap(configDir).getProperty(normalize(serverAddress));
@@ -131,7 +131,7 @@ public final class ClientDictionaryStore {
     }
 
     private static void putMapping(Path configDir, String serverAddress, long dictId) throws IOException {
-        if (serverAddress == null || serverAddress.isBlank()) {
+        if (serverAddress == null || serverAddress.trim().isEmpty()) {
             return;
         }
         Path dir = autoDir(configDir);

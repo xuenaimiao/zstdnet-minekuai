@@ -152,7 +152,7 @@ public final class LanBroadcaster {
     }
 
     private static String sanitizeMotd(String motd) {
-        if (motd == null || motd.isBlank()) {
+        if (motd == null || motd.trim().isEmpty()) {
             return "Minecraft";
         }
         return motd

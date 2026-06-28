@@ -57,6 +57,7 @@ import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -223,9 +224,10 @@ public final class LocalZstdNet {
      * 直连/非环回连接行为不变。
      */
     public static boolean isLocalProxyEndpoint(SocketAddress address) {
-        if (!(address instanceof InetSocketAddress inet)) {
+        if (!(address instanceof InetSocketAddress)) {
             return false;
         }
+        InetSocketAddress inet = (InetSocketAddress) address;
         InetAddress ip = inet.getAddress();
         if (ip == null || !ip.isLoopbackAddress()) {
             return false;
@@ -516,7 +518,7 @@ public final class LocalZstdNet {
             final ChunkCacheStore cacheStore = (clientCacheEnabled && clientCachePersist)
                 ? ChunkCacheStore.open(remoteHost, remotePort, clientCachePersistBytes)
                 : null;
-            final Map<Hash128, byte[]> warmSnapshot = cacheStore != null ? cacheStore.snapshotWarm() : Map.of();
+            final Map<Hash128, byte[]> warmSnapshot = cacheStore != null ? cacheStore.snapshotWarm() : Collections.emptyMap();
 
             Future<?> upstreamWriter = WORKERS.submit(() -> {
                 try (OutputStream zstdOut = ZstdStreams.newCompressor(
@@ -682,7 +684,7 @@ public final class LocalZstdNet {
     }
 
     private static byte[] rewriteHandshakeDestination(byte[] handshakePayload, String host, int port) {
-        if (handshakePayload == null || handshakePayload.length == 0 || host == null || host.isBlank()) {
+        if (handshakePayload == null || handshakePayload.length == 0 || host == null || host.trim().isEmpty()) {
             return handshakePayload;
         }
 
@@ -1091,9 +1093,47 @@ public final class LocalZstdNet {
         }
     }
 
-    public record HostPort(String host, int port) {
+    public static final class HostPort {
+        private final String host;
+        private final int port;
+
+        public HostPort(String host, int port) {
+            this.host = host;
+            this.port = port;
+        }
+
+        public String host() {
+            return this.host;
+        }
+
+        public int port() {
+            return this.port;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof HostPort)) {
+                return false;
+            }
+            HostPort other = (HostPort) o;
+            return this.port == other.port && Objects.equals(this.host, other.host);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(host, port);
+        }
+
+        @Override
+        public String toString() {
+            return "HostPort[host=" + host + ", port=" + port + "]";
+        }
+
         public static HostPort parse(String raw) {
-            if (raw == null || raw.isBlank()) {
+            if (raw == null || raw.trim().isEmpty()) {
                 throw new IllegalArgumentException("empty addr");
             }
 
@@ -1268,27 +1308,196 @@ public final class LocalZstdNet {
         }
     }
 
-    public record StatsSnapshot(
-        Mode mode,
-        String remoteHost,
-        int remotePort,
-        long rawUpBytes,
-        long rawDownBytes,
-        long wireUpBytes,
-        long wireDownBytes,
-        long rawUpRate,
-        long rawDownRate,
-        long wireUpRate,
-        long wireDownRate,
-        double ratioPercent,
-        long cacheRefHits,
-        long cacheWarmHits,
-        long cachePatchHits,
-        long cacheSavedBytes
-    ) {
+    public static final class StatsSnapshot {
+        private final Mode mode;
+        private final String remoteHost;
+        private final int remotePort;
+        private final long rawUpBytes;
+        private final long rawDownBytes;
+        private final long wireUpBytes;
+        private final long wireDownBytes;
+        private final long rawUpRate;
+        private final long rawDownRate;
+        private final long wireUpRate;
+        private final long wireDownRate;
+        private final double ratioPercent;
+        private final long cacheRefHits;
+        private final long cacheWarmHits;
+        private final long cachePatchHits;
+        private final long cacheSavedBytes;
+
+        public StatsSnapshot(
+            Mode mode,
+            String remoteHost,
+            int remotePort,
+            long rawUpBytes,
+            long rawDownBytes,
+            long wireUpBytes,
+            long wireDownBytes,
+            long rawUpRate,
+            long rawDownRate,
+            long wireUpRate,
+            long wireDownRate,
+            double ratioPercent,
+            long cacheRefHits,
+            long cacheWarmHits,
+            long cachePatchHits,
+            long cacheSavedBytes
+        ) {
+            this.mode = mode;
+            this.remoteHost = remoteHost;
+            this.remotePort = remotePort;
+            this.rawUpBytes = rawUpBytes;
+            this.rawDownBytes = rawDownBytes;
+            this.wireUpBytes = wireUpBytes;
+            this.wireDownBytes = wireDownBytes;
+            this.rawUpRate = rawUpRate;
+            this.rawDownRate = rawDownRate;
+            this.wireUpRate = wireUpRate;
+            this.wireDownRate = wireDownRate;
+            this.ratioPercent = ratioPercent;
+            this.cacheRefHits = cacheRefHits;
+            this.cacheWarmHits = cacheWarmHits;
+            this.cachePatchHits = cachePatchHits;
+            this.cacheSavedBytes = cacheSavedBytes;
+        }
+
+        public Mode mode() {
+            return this.mode;
+        }
+
+        public String remoteHost() {
+            return this.remoteHost;
+        }
+
+        public int remotePort() {
+            return this.remotePort;
+        }
+
+        public long rawUpBytes() {
+            return this.rawUpBytes;
+        }
+
+        public long rawDownBytes() {
+            return this.rawDownBytes;
+        }
+
+        public long wireUpBytes() {
+            return this.wireUpBytes;
+        }
+
+        public long wireDownBytes() {
+            return this.wireDownBytes;
+        }
+
+        public long rawUpRate() {
+            return this.rawUpRate;
+        }
+
+        public long rawDownRate() {
+            return this.rawDownRate;
+        }
+
+        public long wireUpRate() {
+            return this.wireUpRate;
+        }
+
+        public long wireDownRate() {
+            return this.wireDownRate;
+        }
+
+        public double ratioPercent() {
+            return this.ratioPercent;
+        }
+
+        public long cacheRefHits() {
+            return this.cacheRefHits;
+        }
+
+        public long cacheWarmHits() {
+            return this.cacheWarmHits;
+        }
+
+        public long cachePatchHits() {
+            return this.cachePatchHits;
+        }
+
+        public long cacheSavedBytes() {
+            return this.cacheSavedBytes;
+        }
+
         /** 区块引用缓存是否产生过收益（任一 REF/WARM/PATCH 命中）。 */
         public boolean hasCacheActivity() {
             return cacheRefHits > 0 || cacheWarmHits > 0 || cachePatchHits > 0;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof StatsSnapshot)) {
+                return false;
+            }
+            StatsSnapshot other = (StatsSnapshot) o;
+            return this.remotePort == other.remotePort
+                && this.rawUpBytes == other.rawUpBytes
+                && this.rawDownBytes == other.rawDownBytes
+                && this.wireUpBytes == other.wireUpBytes
+                && this.wireDownBytes == other.wireDownBytes
+                && this.rawUpRate == other.rawUpRate
+                && this.rawDownRate == other.rawDownRate
+                && this.wireUpRate == other.wireUpRate
+                && this.wireDownRate == other.wireDownRate
+                && Double.compare(this.ratioPercent, other.ratioPercent) == 0
+                && this.cacheRefHits == other.cacheRefHits
+                && this.cacheWarmHits == other.cacheWarmHits
+                && this.cachePatchHits == other.cachePatchHits
+                && this.cacheSavedBytes == other.cacheSavedBytes
+                && Objects.equals(this.mode, other.mode)
+                && Objects.equals(this.remoteHost, other.remoteHost);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(
+                mode,
+                remoteHost,
+                remotePort,
+                rawUpBytes,
+                rawDownBytes,
+                wireUpBytes,
+                wireDownBytes,
+                rawUpRate,
+                rawDownRate,
+                wireUpRate,
+                wireDownRate,
+                ratioPercent,
+                cacheRefHits,
+                cacheWarmHits,
+                cachePatchHits,
+                cacheSavedBytes
+            );
+        }
+
+        @Override
+        public String toString() {
+            return "StatsSnapshot[mode=" + mode
+                + ", remoteHost=" + remoteHost
+                + ", remotePort=" + remotePort
+                + ", rawUpBytes=" + rawUpBytes
+                + ", rawDownBytes=" + rawDownBytes
+                + ", wireUpBytes=" + wireUpBytes
+                + ", wireDownBytes=" + wireDownBytes
+                + ", rawUpRate=" + rawUpRate
+                + ", rawDownRate=" + rawDownRate
+                + ", wireUpRate=" + wireUpRate
+                + ", wireDownRate=" + wireDownRate
+                + ", ratioPercent=" + ratioPercent
+                + ", cacheRefHits=" + cacheRefHits
+                + ", cacheWarmHits=" + cacheWarmHits
+                + ", cachePatchHits=" + cachePatchHits
+                + ", cacheSavedBytes=" + cacheSavedBytes + "]";
         }
     }
 

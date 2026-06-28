@@ -156,7 +156,7 @@ class ChunkCacheMeasurementTest {
     private static byte[] concat(byte[]... arrays) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] a : arrays) {
-            out.writeBytes(a);
+            out.write(a, 0, a.length);
         }
         return out.toByteArray();
     }

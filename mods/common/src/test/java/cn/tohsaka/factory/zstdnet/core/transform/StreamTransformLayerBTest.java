@@ -221,14 +221,18 @@ class StreamTransformLayerBTest {
     /** 构造一个开启原版压缩(threshold 极高)时的 play 帧：[packetLength][dataLength=0][packetId][entityId][rest]。 */
     private static byte[] playFrame(int packetId, int entityId, byte[] rest) {
         ByteArrayOutputStream payload = new ByteArrayOutputStream();
-        payload.writeBytes(VarIntCodec.encode(0));           // dataLength=0（未压缩）
-        payload.writeBytes(VarIntCodec.encode(packetId));
-        payload.writeBytes(VarIntCodec.encode(entityId));
-        payload.writeBytes(rest);
+        byte[] dataLen = VarIntCodec.encode(0);              // dataLength=0（未压缩）
+        payload.write(dataLen, 0, dataLen.length);
+        byte[] pid = VarIntCodec.encode(packetId);
+        payload.write(pid, 0, pid.length);
+        byte[] eid = VarIntCodec.encode(entityId);
+        payload.write(eid, 0, eid.length);
+        payload.write(rest, 0, rest.length);
         byte[] p = payload.toByteArray();
         ByteArrayOutputStream frame = new ByteArrayOutputStream();
-        frame.writeBytes(VarIntCodec.encode(p.length));
-        frame.writeBytes(p);
+        byte[] frameLen = VarIntCodec.encode(p.length);
+        frame.write(frameLen, 0, frameLen.length);
+        frame.write(p, 0, p.length);
         return frame.toByteArray();
     }
 
@@ -246,7 +250,7 @@ class StreamTransformLayerBTest {
     private static byte[] concat(List<byte[]> parts) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] p : parts) {
-            out.writeBytes(p);
+            out.write(p, 0, p.length);
         }
         return out.toByteArray();
     }
@@ -311,8 +315,7 @@ class StreamTransformLayerBTest {
     /** 把已变换字节经 ZSTD 连续帧压缩后的字节数（模拟下行 flush-per-tick 的逐 block 压缩）。 */
     private static long compressedSize(byte[] data) throws IOException {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
-        OutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false);
-        try (zstd) {
+        try (OutputStream zstd = ZstdStreams.newCompressor(wire, 9, CompressionOptions.none(), false)) {
             zstd.write(data);
         }
         return wire.size();

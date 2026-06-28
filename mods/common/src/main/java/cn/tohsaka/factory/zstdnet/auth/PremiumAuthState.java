@@ -44,11 +44,24 @@ public final class PremiumAuthState {
      */
     public static boolean resolveEnabled(String premiumVerification, boolean onlineMode) {
         String mode = premiumVerification == null ? "" : premiumVerification.trim().toLowerCase(Locale.ROOT);
-        return switch (mode) {
-            case "on", "true", "force" -> true;
-            case "off", "false", "disable", "disabled" -> false;
-            default -> onlineMode; // auto（含空/未知值）
-        };
+        boolean result;
+        switch (mode) {
+            case "on":
+            case "true":
+            case "force":
+                result = true;
+                break;
+            case "off":
+            case "false":
+            case "disable":
+            case "disabled":
+                result = false;
+                break;
+            default:
+                result = onlineMode; // auto（含空/未知值）
+                break;
+        }
+        return result;
     }
 
     /** 由 {@code premium_verification_mode} 解析是否严格（拒绝未通过验证者）。 */
@@ -61,7 +74,7 @@ public final class PremiumAuthState {
     public static void configure(boolean enabledValue, boolean strictValue, String sessionBase, boolean passRealIpValue) {
         enabled = enabledValue;
         strict = strictValue;
-        if (sessionBase != null && !sessionBase.isBlank()) {
+        if (sessionBase != null && !sessionBase.trim().isEmpty()) {
             sessionBaseUrl = sessionBase.trim();
         }
         passRealIp = passRealIpValue;

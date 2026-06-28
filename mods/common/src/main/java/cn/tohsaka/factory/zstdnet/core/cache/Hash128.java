@@ -19,6 +19,8 @@
 
 package cn.tohsaka.factory.zstdnet.core.cache;
 
+import java.util.Objects;
+
 /**
  * 128 位内容哈希值（{@code hi} + {@code lo}），用作<b>跨会话</b> WARM_REF 令牌与磁盘缓存键。
  * 不可变值类型，自带 {@code equals}/{@code hashCode}，可直接做 {@code Map} 键。
@@ -26,7 +28,25 @@ package cn.tohsaka.factory.zstdnet.core.cache;
  * <p>线路上以 16 字节大端表示（{@code hi} 在前、{@code lo} 在后）；磁盘文件名以 32 位十六进制小写表示。
  * 见 {@link Hashing#content128} 的宽度用途说明。
  */
-public record Hash128(long hi, long lo) {
+public final class Hash128 {
+
+    private final long hi;
+    private final long lo;
+
+    public Hash128(long hi, long lo) {
+        this.hi = hi;
+        this.lo = lo;
+    }
+
+    /** {@code hi} 高 64 位。 */
+    public long hi() {
+        return this.hi;
+    }
+
+    /** {@code lo} 低 64 位。 */
+    public long lo() {
+        return this.lo;
+    }
 
     /** 16 字节大端编码（{@code hi} 高 8 字节，{@code lo} 低 8 字节）。 */
     public byte[] toBytes() {
@@ -71,6 +91,23 @@ public record Hash128(long hi, long lo) {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Hash128)) {
+            return false;
+        }
+        Hash128 other = (Hash128) o;
+        return this.hi == other.hi && this.lo == other.lo;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(hi, lo);
     }
 
     @Override

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -48,9 +49,9 @@ class ChunkManifestTest {
 
     @Test
     void emptyManifestRoundTrips() throws IOException {
-        byte[] frame = ChunkManifest.encode(List.of());
+        byte[] frame = ChunkManifest.encode(Collections.emptyList());
         List<Hash128> out = ChunkManifest.parse(frame);
-        assertEquals(List.of(), out);
+        assertEquals(Collections.emptyList(), out);
     }
 
     @Test
@@ -64,21 +65,21 @@ class ChunkManifestTest {
 
     @Test
     void badVersionFailsClosed() {
-        byte[] frame = ChunkManifest.encode(List.of(new Hash128(1, 2)));
+        byte[] frame = ChunkManifest.encode(Arrays.asList(new Hash128(1, 2)));
         frame[ChunkCacheFormat.MANIFEST_MAGIC.length] = (byte) 0x7F; // 篡改版本
         assertThrows(IOException.class, () -> ChunkManifest.parse(frame));
     }
 
     @Test
     void truncatedEntriesFailClosed() {
-        byte[] frame = ChunkManifest.encode(List.of(new Hash128(1, 2), new Hash128(3, 4)));
+        byte[] frame = ChunkManifest.encode(Arrays.asList(new Hash128(1, 2), new Hash128(3, 4)));
         byte[] cut = Arrays.copyOf(frame, frame.length - 5); // 砍掉部分条目字节
         assertThrows(IOException.class, () -> ChunkManifest.parse(cut));
     }
 
     @Test
     void declaredCountMismatchFailsClosed() {
-        byte[] frame = ChunkManifest.encode(List.of(new Hash128(1, 2)));
+        byte[] frame = ChunkManifest.encode(Arrays.asList(new Hash128(1, 2)));
         // 追加垃圾字节使长度与声明计数不符。
         byte[] extended = Arrays.copyOf(frame, frame.length + 4);
         assertThrows(IOException.class, () -> ChunkManifest.parse(extended));

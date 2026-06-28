@@ -20,14 +20,99 @@
 package cn.tohsaka.factory.zstdnet;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Client-published zstd server list model.
  */
-public record ZstdServerList(List<ZstdServer> servers) {
+public final class ZstdServerList {
+    private final List<ZstdServer> servers;
+
+    public ZstdServerList(List<ZstdServer> servers) {
+        this.servers = servers;
+    }
+
+    public List<ZstdServer> servers() {
+        return this.servers;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof ZstdServerList)) {
+            return false;
+        }
+        ZstdServerList other = (ZstdServerList) o;
+        return Objects.equals(this.servers, other.servers);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(servers);
+    }
+
+    @Override
+    public String toString() {
+        return "ZstdServerList[servers=" + servers + "]";
+    }
+
     /**
      * Simplified client entry format.
      */
-    public record ZstdServer(String name, String addr, String mask, String mode) {
+    public static final class ZstdServer {
+        private final String name;
+        private final String addr;
+        private final String mask;
+        private final String mode;
+
+        public ZstdServer(String name, String addr, String mask, String mode) {
+            this.name = name;
+            this.addr = addr;
+            this.mask = mask;
+            this.mode = mode;
+        }
+
+        public String name() {
+            return this.name;
+        }
+
+        public String addr() {
+            return this.addr;
+        }
+
+        public String mask() {
+            return this.mask;
+        }
+
+        public String mode() {
+            return this.mode;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ZstdServer)) {
+                return false;
+            }
+            ZstdServer other = (ZstdServer) o;
+            return Objects.equals(this.name, other.name)
+                && Objects.equals(this.addr, other.addr)
+                && Objects.equals(this.mask, other.mask)
+                && Objects.equals(this.mode, other.mode);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(name, addr, mask, mode);
+        }
+
+        @Override
+        public String toString() {
+            return "ZstdServer[name=" + name + ", addr=" + addr + ", mask=" + mask + ", mode=" + mode + "]";
+        }
     }
 }

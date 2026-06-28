@@ -77,6 +77,7 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -96,6 +97,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * 内置服务端代理运行时模块。
@@ -167,7 +169,7 @@ final class ServerProxyRuntime {
     private RuntimeMode runtimeMode;
     private volatile HudSnapshot latestHudSnapshot;
     private volatile long loadedConfigLastModified = Long.MIN_VALUE;
-    private List<UdpForwarder> udpForwarders = List.of();
+    private List<UdpForwarder> udpForwarders = Collections.emptyList();
     private volatile VoicePortPlan voicePortPlan = VoicePortPlan.empty();
 
     /**
@@ -320,7 +322,7 @@ final class ServerProxyRuntime {
     }
 
     private int parseOptionalPort(String raw) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return -1;
         }
         try {
@@ -459,9 +461,7 @@ final class ServerProxyRuntime {
                 LOGGER.warn("[server] rejected raw login attempt from {} on zstd-only entry", guardIp);
                 sendLoginDisconnect(
                     clientSocket,
-                    """
-                    当前服务器启用了 ZSTD 连接，请联系服务器管理员获取正确的连接方式。
-                    """
+                    "当前服务器启用了 ZSTD 连接，请联系服务器管理员获取正确的连接方式。\n"
                 );
                 return;
             }
@@ -520,7 +520,7 @@ final class ServerProxyRuntime {
                 int clientTransformVersion = 0;
                 int clientProtocolVersion = 0;
                 int clientChunkCacheVersion = 0;
-                Set<Hash128> clientWarmSet = Set.of();
+                Set<Hash128> clientWarmSet = Collections.emptySet();
                 try {
                     upstreamDecompressor = ZstdStreams.newDecompressor(
                         new CountingInputStream(pushIn, stats::addZstdUp), cfg.compression, upstreamDict);
@@ -581,7 +581,7 @@ final class ServerProxyRuntime {
                     ? Math.min(clientChunkCacheVersion, ChunkCacheFormat.MAX_SUPPORTED_VERSION)
                     : 0;
                 final Set<Hash128> chunkWarm = chunkCacheVersion >= ChunkCacheFormat.VERSION_MANIFEST
-                    ? clientWarmSet : Set.of();
+                    ? clientWarmSet : Collections.emptySet();
                 // AUTO 才启用自适应旁路（显式 ref/full 则确定性缓存，不旁路）。
                 final int chunkCacheBypassWindow = cfg.chunkCache == CacheMode.AUTO
                     ? ChunkCacheFormat.DEFAULT_AUTO_BYPASS_WINDOW : 0;
@@ -687,7 +687,7 @@ final class ServerProxyRuntime {
             return null;
         }
 
-        if (!proxyInfo.valid || proxyInfo.sourceIp == null || proxyInfo.sourceIp.isBlank()) {
+        if (!proxyInfo.valid || proxyInfo.sourceIp == null || proxyInfo.sourceIp.trim().isEmpty()) {
             LOGGER.warn("[server] rejected trusted PROXY protocol peer {} without a valid PROXY v2 header", remoteIp);
             return null;
         }
@@ -780,7 +780,7 @@ final class ServerProxyRuntime {
      * 这里只负责其余字节的解压循环。
      */
     private void pumpDecompress(Socket dst, InputStream zstdIn, TrafficStats stats) throws IOException {
-        try (zstdIn) {
+        try (InputStream zstdInResource = zstdIn) {
             OutputStream dstOut = dst.getOutputStream();
             byte[] buf = new byte[16 * 1024];
             int n;
@@ -797,7 +797,51 @@ final class ServerProxyRuntime {
      * 握手改写结果：改写后的握手包 + 客户端 advertise 的 transform 版本（0 表示无） +
      * 客户端 MC 协议版本号（用于选实体包表；0 表示未知/解析失败）。
      */
-    private record HandshakeRewrite(byte[] packet, int transformVersion, int protocolVersion, int chunkCacheVersion) {
+    private static final class HandshakeRewrite {
+        private final byte[] packet;
+        private final int transformVersion;
+        private final int protocolVersion;
+        private final int chunkCacheVersion;
+
+        private HandshakeRewrite(byte[] packet, int transformVersion, int protocolVersion, int chunkCacheVersion) {
+            this.packet = packet;
+            this.transformVersion = transformVersion;
+            this.protocolVersion = protocolVersion;
+            this.chunkCacheVersion = chunkCacheVersion;
+        }
+
+        public byte[] packet() { return this.packet; }
+        public int transformVersion() { return this.transformVersion; }
+        public int protocolVersion() { return this.protocolVersion; }
+        public int chunkCacheVersion() { return this.chunkCacheVersion; }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof HandshakeRewrite)) {
+                return false;
+            }
+            HandshakeRewrite other = (HandshakeRewrite) o;
+            return Objects.equals(this.packet, other.packet)
+                && this.transformVersion == other.transformVersion
+                && this.protocolVersion == other.protocolVersion
+                && this.chunkCacheVersion == other.chunkCacheVersion;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(packet, transformVersion, protocolVersion, chunkCacheVersion);
+        }
+
+        @Override
+        public String toString() {
+            return "HandshakeRewrite[packet=" + packet
+                + ", transformVersion=" + transformVersion
+                + ", protocolVersion=" + protocolVersion
+                + ", chunkCacheVersion=" + chunkCacheVersion + "]";
+        }
     }
 
     /**
@@ -840,7 +884,7 @@ final class ServerProxyRuntime {
         int transformVersion = TransformHandshake.parseVersion(originalHost);
         int chunkCacheVersion = ChunkCacheHandshake.parseVersion(originalHost);
         String cleanedHost = ChunkCacheHandshake.strip(TransformHandshake.strip(originalHost));
-        String forwardedHost = (sourceIp != null && !sourceIp.isBlank())
+        String forwardedHost = (sourceIp != null && !sourceIp.trim().isEmpty())
             ? appendForwardedIpMarker(cleanedHost, sourceIp)
             : cleanedHost;
 
@@ -857,7 +901,7 @@ final class ServerProxyRuntime {
             hostBytes = cleanedBytes;
         }
 
-        if (sourceIp != null && !sourceIp.isBlank()) {
+        if (sourceIp != null && !sourceIp.trim().isEmpty()) {
             LOGGER.info("[zstdnet-server] appended forwarded real IP {} to login handshake host '{}'", sourceIp, cleanedHost);
         }
 
@@ -962,7 +1006,7 @@ final class ServerProxyRuntime {
         } else {
             sink = zstdOut;
         }
-        try (sink) {
+        try (OutputStream sinkResource = sink) {
             InputStream srcIn = src.getInputStream();
             byte[] buf = new byte[16 * 1024];
             final long flushIntervalNs = Math.max(0L, flushInterval.toNanos());
@@ -1229,7 +1273,7 @@ final class ServerProxyRuntime {
     }
 
     private void sendLoginDisconnect(Socket clientSocket, String message) {
-        if (clientSocket == null || message == null || message.isBlank()) {
+        if (clientSocket == null || message == null || message.trim().isEmpty()) {
             return;
         }
 
@@ -1387,7 +1431,7 @@ final class ServerProxyRuntime {
             try {
                 Files.createDirectories(path.getParent());
                 String body = buildDefaultConfig(mcServerPort, mode);
-                Files.writeString(path, body, StandardCharsets.UTF_8);
+                Files.write(path, body.getBytes(StandardCharsets.UTF_8));
                 LOGGER.info("[zstdnet-server] generated config: {}", path);
                 LOGGER.info("[zstdnet-server] 已生成默认配置：专用服会保留 server.properties 里的 server-port 作为公网入口，自动改用本地空闲端口作为后端，并拒绝原版直连登录。");
             } catch (IOException e) {
@@ -1686,7 +1730,7 @@ final class ServerProxyRuntime {
 
     private Set<String> parseTrustedProxyIps(String raw) {
         LinkedHashSet<String> ips = new LinkedHashSet<>();
-        String source = raw == null || raw.isBlank() ? DEFAULT_TRUSTED_PROXY_IPS : raw;
+        String source = raw == null || raw.trim().isEmpty() ? DEFAULT_TRUSTED_PROXY_IPS : raw;
         for (String item : source.split(",")) {
             String value = item.trim();
             if (!value.isEmpty()) {
@@ -1698,7 +1742,7 @@ final class ServerProxyRuntime {
             ips.add("::1");
             ips.add("0:0:0:0:0:0:0:1");
         }
-        return Set.copyOf(ips);
+        return Collections.unmodifiableSet(new LinkedHashSet<>(ips));
     }
 
     /**
@@ -1713,84 +1757,82 @@ final class ServerProxyRuntime {
     }
 
     private String buildDedicatedDefaultConfig() {
-        return """
-            # ------------------------------------------------------------
-            # zstdnet 内置服务端配置（自动生成）
-            # ------------------------------------------------------------
-            # 1) 专用服默认建议保持 auto_takeover=true。
-            # 2) auto_takeover=true 时，公网入口跟随 server.properties 里的 server-port。
-            # 3) 默认只透传原版状态查询，不透传原版登录。
-            # 4) listen / target 仅在高级手动模式下需要额外填写。
-            # 5) 地址不要写成 127.0.0.1.（末尾带点会解析失败）。
-
-            # 是否启用内置 zstd 代理。
-            enabled=true
-
-            # 是否自动接管 server.properties 里的 server-port 作为公网入口。
-            auto_takeover=true
-
-            # 如需切回手动模式，可额外填写：
-            # listen=0.0.0.0:25565
-            # target=127.0.0.1:25566
-
-            # Simple Voice Chat 的原样 UDP 转发。
-            voice_chat_passthrough=true
-
-            # 语音聊天的公网 UDP 入口；LAN 默认跟随当前游戏 UDP 端口。
-            voice_chat_listen=0.0.0.0:${VOICE_PORT}
-
-            # 语音聊天的后端 UDP 目标；LAN 默认指向当前游戏 UDP 端口。
-            voice_chat_target=127.0.0.1:${VOICE_PORT}
-
-            # 语音/UDP 传输方式：tunnel=语音也走入口端口（只放行一个口）；bridge=语音直连真实服务器同端口。
-            voice_transport=tunnel
-
-            # 额外透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。留空=仅自动探测。
-            extra_udp_ports=
-
-            # zstd 压缩等级（1-22，通常建议 3-9）。
-            level=${LEVEL}
-
-            # 单个 IP 最大并发连接数（<=0 表示关闭限制）。
-            max_conn_per_ip=${MAX_CONN}
-
-            # 单个 IP 在 request_window 内最大请求次数（<=0 表示关闭限制）。
-            max_req_per_window=${MAX_REQ}
-
-            # 请求计数时间窗口。
-            request_window=10s
-
-            # 超限后的封禁时长。
-            ban_duration=1m
-
-            # 统计日志输出间隔。
-            stats_interval=0s
-
-            # zstd flush 间隔，0ms 表示每次写入都 flush。
-            flush_interval=2ms
-
-            # 后端读取空闲超时，0 表示关闭。
-            idle_timeout=0
-
-            # 单连接限速（字节/秒，0 表示关闭）。
-            max_rate_per_conn_bps=0
-
-            # 全局总限速（字节/秒，0 表示关闭）。
-            max_rate_global_bps=0
-
-            # 令牌桶突发容量（字节）。
-            burst_bytes=${BURST_BYTES}
-
-            # 如果玩家是通过 frp / 反代进服，并且你想让后端看到玩家真实 IP，就改成 true。
-            # 普通直连、本机测试、局域网、公网直连都保持 false。
-            # 改成 true 后，直接连 zstdnet 入口端口但不带 PROXY v2 头的连接会被拒绝。
-            trust_proxy_protocol=false
-
-            # 允许哪些机器转发“玩家真实 IP”给 zstdnet。
-            # frpc 和服务端在同一台机器时不用改，保持 127.0.0.1 即可。
-            # 如果 frpc 在另一台机器，就填那台机器连接到本服务器时使用的内网 IP。
-            trusted_proxy_ips=${TRUSTED_PROXY_IPS}
-            """
+        return ("# ------------------------------------------------------------\n"
+            + "# zstdnet 内置服务端配置（自动生成）\n"
+            + "# ------------------------------------------------------------\n"
+            + "# 1) 专用服默认建议保持 auto_takeover=true。\n"
+            + "# 2) auto_takeover=true 时，公网入口跟随 server.properties 里的 server-port。\n"
+            + "# 3) 默认只透传原版状态查询，不透传原版登录。\n"
+            + "# 4) listen / target 仅在高级手动模式下需要额外填写。\n"
+            + "# 5) 地址不要写成 127.0.0.1.（末尾带点会解析失败）。\n"
+            + "\n"
+            + "# 是否启用内置 zstd 代理。\n"
+            + "enabled=true\n"
+            + "\n"
+            + "# 是否自动接管 server.properties 里的 server-port 作为公网入口。\n"
+            + "auto_takeover=true\n"
+            + "\n"
+            + "# 如需切回手动模式，可额外填写：\n"
+            + "# listen=0.0.0.0:25565\n"
+            + "# target=127.0.0.1:25566\n"
+            + "\n"
+            + "# Simple Voice Chat 的原样 UDP 转发。\n"
+            + "voice_chat_passthrough=true\n"
+            + "\n"
+            + "# 语音聊天的公网 UDP 入口；LAN 默认跟随当前游戏 UDP 端口。\n"
+            + "voice_chat_listen=0.0.0.0:${VOICE_PORT}\n"
+            + "\n"
+            + "# 语音聊天的后端 UDP 目标；LAN 默认指向当前游戏 UDP 端口。\n"
+            + "voice_chat_target=127.0.0.1:${VOICE_PORT}\n"
+            + "\n"
+            + "# 语音/UDP 传输方式：tunnel=语音也走入口端口（只放行一个口）；bridge=语音直连真实服务器同端口。\n"
+            + "voice_transport=tunnel\n"
+            + "\n"
+            + "# 额外透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。留空=仅自动探测。\n"
+            + "extra_udp_ports=\n"
+            + "\n"
+            + "# zstd 压缩等级（1-22，通常建议 3-9）。\n"
+            + "level=${LEVEL}\n"
+            + "\n"
+            + "# 单个 IP 最大并发连接数（<=0 表示关闭限制）。\n"
+            + "max_conn_per_ip=${MAX_CONN}\n"
+            + "\n"
+            + "# 单个 IP 在 request_window 内最大请求次数（<=0 表示关闭限制）。\n"
+            + "max_req_per_window=${MAX_REQ}\n"
+            + "\n"
+            + "# 请求计数时间窗口。\n"
+            + "request_window=10s\n"
+            + "\n"
+            + "# 超限后的封禁时长。\n"
+            + "ban_duration=1m\n"
+            + "\n"
+            + "# 统计日志输出间隔。\n"
+            + "stats_interval=0s\n"
+            + "\n"
+            + "# zstd flush 间隔，0ms 表示每次写入都 flush。\n"
+            + "flush_interval=2ms\n"
+            + "\n"
+            + "# 后端读取空闲超时，0 表示关闭。\n"
+            + "idle_timeout=0\n"
+            + "\n"
+            + "# 单连接限速（字节/秒，0 表示关闭）。\n"
+            + "max_rate_per_conn_bps=0\n"
+            + "\n"
+            + "# 全局总限速（字节/秒，0 表示关闭）。\n"
+            + "max_rate_global_bps=0\n"
+            + "\n"
+            + "# 令牌桶突发容量（字节）。\n"
+            + "burst_bytes=${BURST_BYTES}\n"
+            + "\n"
+            + "# 如果玩家是通过 frp / 反代进服，并且你想让后端看到玩家真实 IP，就改成 true。\n"
+            + "# 普通直连、本机测试、局域网、公网直连都保持 false。\n"
+            + "# 改成 true 后，直接连 zstdnet 入口端口但不带 PROXY v2 头的连接会被拒绝。\n"
+            + "trust_proxy_protocol=false\n"
+            + "\n"
+            + "# 允许哪些机器转发“玩家真实 IP”给 zstdnet。\n"
+            + "# frpc 和服务端在同一台机器时不用改，保持 127.0.0.1 即可。\n"
+            + "# 如果 frpc 在另一台机器，就填那台机器连接到本服务器时使用的内网 IP。\n"
+            + "trusted_proxy_ips=${TRUSTED_PROXY_IPS}\n")
             .replace("${LEVEL}", String.valueOf(DEFAULT_ZSTD_LEVEL))
             .replace("${MAX_CONN}", String.valueOf(DEFAULT_MAX_CONN_PER_IP))
             .replace("${MAX_REQ}", String.valueOf(DEFAULT_MAX_REQ_PER_WINDOW))
@@ -1799,87 +1841,85 @@ final class ServerProxyRuntime {
     }
 
     private String buildLanDefaultConfig(int mcServerPort) {
-        return """
-            # ------------------------------------------------------------
-            # zstdnet 内置服务端配置（自动生成）
-            # ------------------------------------------------------------
-            # 1) 这个模板主要用于单机开房 / 局域网转发场景。
-            # 2) 这里会直接写出当前 zstd 入口和后端游戏端口，方便房主查看和调整。
-            # 3) 默认只透传原版状态查询，不透传原版登录。
-            # 4) 地址不要写成 127.0.0.1.（末尾带点会解析失败）。
-
-            # 是否启用内置 zstd 代理。
-            enabled=true
-
-            # 是否自动接管当前公开的游戏端口作为公网入口。
-            auto_takeover=true
-
-            # zstd 公网监听入口。
-            # 单机 / 局域网场景下，这里通常就是当前对外分享的 zstd 端口。
-            listen=0.0.0.0:${LISTEN_PORT}
-
-            # 后端 Minecraft 地址。
-            # 一般保持为本地游戏端口即可。
-            target=127.0.0.1:${TARGET_PORT}
-
-            # Simple Voice Chat 的原样 UDP 转发。
-            voice_chat_passthrough=true
-
-            # 语音聊天的公网 UDP 入口；留空时跟随当前 LAN 端口，填写后按配置值生效。
-            voice_chat_listen=
-
-            # 语音聊天的后端 UDP 目标；留空时指向本机当前 LAN 端口，填写后按配置值生效。
-            voice_chat_target=
-
-            # 语音/UDP 传输方式：tunnel=语音也走入口端口（只放行一个口）；bridge=语音直连真实服务器同端口。
-            voice_transport=tunnel
-
-            # 额外透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。留空=仅自动探测。
-            extra_udp_ports=
-
-            # zstd 压缩等级（1-22，通常建议 3-9）。
-            level=${LEVEL}
-
-            # 单个 IP 最大并发连接数（<=0 表示关闭限制）。
-            max_conn_per_ip=${MAX_CONN}
-
-            # 单个 IP 在 request_window 内最大请求次数（<=0 表示关闭限制）。
-            max_req_per_window=${MAX_REQ}
-
-            # 请求计数时间窗口。
-            request_window=10s
-
-            # 超限后的封禁时长。
-            ban_duration=1m
-
-            # 统计日志输出间隔。
-            stats_interval=0s
-
-            # zstd flush 间隔，0ms 表示每次写入都 flush。
-            flush_interval=2ms
-
-            # 后端读取空闲超时，0 表示关闭。
-            idle_timeout=0
-
-            # 单连接限速（字节/秒，0 表示关闭）。
-            max_rate_per_conn_bps=0
-
-            # 全局总限速（字节/秒，0 表示关闭）。
-            max_rate_global_bps=0
-
-            # 令牌桶突发容量（字节）。
-            burst_bytes=${BURST_BYTES}
-
-            # 如果玩家是通过 frp / 反代进服，并且你想让后端看到玩家真实 IP，就改成 true。
-            # 普通直连、本机测试、局域网、公网直连都保持 false。
-            # 改成 true 后，直接连 zstdnet 入口端口但不带 PROXY v2 头的连接会被拒绝。
-            trust_proxy_protocol=false
-
-            # 允许哪些机器转发“玩家真实 IP”给 zstdnet。
-            # frpc 和服务端在同一台机器时不用改，保持 127.0.0.1 即可。
-            # 如果 frpc 在另一台机器，就填那台机器连接到本服务器时使用的内网 IP。
-            trusted_proxy_ips=${TRUSTED_PROXY_IPS}
-            """
+        return ("# ------------------------------------------------------------\n"
+            + "# zstdnet 内置服务端配置（自动生成）\n"
+            + "# ------------------------------------------------------------\n"
+            + "# 1) 这个模板主要用于单机开房 / 局域网转发场景。\n"
+            + "# 2) 这里会直接写出当前 zstd 入口和后端游戏端口，方便房主查看和调整。\n"
+            + "# 3) 默认只透传原版状态查询，不透传原版登录。\n"
+            + "# 4) 地址不要写成 127.0.0.1.（末尾带点会解析失败）。\n"
+            + "\n"
+            + "# 是否启用内置 zstd 代理。\n"
+            + "enabled=true\n"
+            + "\n"
+            + "# 是否自动接管当前公开的游戏端口作为公网入口。\n"
+            + "auto_takeover=true\n"
+            + "\n"
+            + "# zstd 公网监听入口。\n"
+            + "# 单机 / 局域网场景下，这里通常就是当前对外分享的 zstd 端口。\n"
+            + "listen=0.0.0.0:${LISTEN_PORT}\n"
+            + "\n"
+            + "# 后端 Minecraft 地址。\n"
+            + "# 一般保持为本地游戏端口即可。\n"
+            + "target=127.0.0.1:${TARGET_PORT}\n"
+            + "\n"
+            + "# Simple Voice Chat 的原样 UDP 转发。\n"
+            + "voice_chat_passthrough=true\n"
+            + "\n"
+            + "# 语音聊天的公网 UDP 入口；留空时跟随当前 LAN 端口，填写后按配置值生效。\n"
+            + "voice_chat_listen=\n"
+            + "\n"
+            + "# 语音聊天的后端 UDP 目标；留空时指向本机当前 LAN 端口，填写后按配置值生效。\n"
+            + "voice_chat_target=\n"
+            + "\n"
+            + "# 语音/UDP 传输方式：tunnel=语音也走入口端口（只放行一个口）；bridge=语音直连真实服务器同端口。\n"
+            + "voice_transport=tunnel\n"
+            + "\n"
+            + "# 额外透传的 UDP 端口（逗号分隔），用于自动探测覆盖不到的其它 UDP 模组。留空=仅自动探测。\n"
+            + "extra_udp_ports=\n"
+            + "\n"
+            + "# zstd 压缩等级（1-22，通常建议 3-9）。\n"
+            + "level=${LEVEL}\n"
+            + "\n"
+            + "# 单个 IP 最大并发连接数（<=0 表示关闭限制）。\n"
+            + "max_conn_per_ip=${MAX_CONN}\n"
+            + "\n"
+            + "# 单个 IP 在 request_window 内最大请求次数（<=0 表示关闭限制）。\n"
+            + "max_req_per_window=${MAX_REQ}\n"
+            + "\n"
+            + "# 请求计数时间窗口。\n"
+            + "request_window=10s\n"
+            + "\n"
+            + "# 超限后的封禁时长。\n"
+            + "ban_duration=1m\n"
+            + "\n"
+            + "# 统计日志输出间隔。\n"
+            + "stats_interval=0s\n"
+            + "\n"
+            + "# zstd flush 间隔，0ms 表示每次写入都 flush。\n"
+            + "flush_interval=2ms\n"
+            + "\n"
+            + "# 后端读取空闲超时，0 表示关闭。\n"
+            + "idle_timeout=0\n"
+            + "\n"
+            + "# 单连接限速（字节/秒，0 表示关闭）。\n"
+            + "max_rate_per_conn_bps=0\n"
+            + "\n"
+            + "# 全局总限速（字节/秒，0 表示关闭）。\n"
+            + "max_rate_global_bps=0\n"
+            + "\n"
+            + "# 令牌桶突发容量（字节）。\n"
+            + "burst_bytes=${BURST_BYTES}\n"
+            + "\n"
+            + "# 如果玩家是通过 frp / 反代进服，并且你想让后端看到玩家真实 IP，就改成 true。\n"
+            + "# 普通直连、本机测试、局域网、公网直连都保持 false。\n"
+            + "# 改成 true 后，直接连 zstdnet 入口端口但不带 PROXY v2 头的连接会被拒绝。\n"
+            + "trust_proxy_protocol=false\n"
+            + "\n"
+            + "# 允许哪些机器转发“玩家真实 IP”给 zstdnet。\n"
+            + "# frpc 和服务端在同一台机器时不用改，保持 127.0.0.1 即可。\n"
+            + "# 如果 frpc 在另一台机器，就填那台机器连接到本服务器时使用的内网 IP。\n"
+            + "trusted_proxy_ips=${TRUSTED_PROXY_IPS}\n")
             .replace("${LISTEN_PORT}", String.valueOf(mcServerPort))
             .replace("${TARGET_PORT}", String.valueOf(defaultAutoTargetPort(mcServerPort)))
             .replace("${VOICE_PORT}", String.valueOf(mcServerPort))
@@ -1995,7 +2035,7 @@ final class ServerProxyRuntime {
     }
 
     private static int findFreeUdpPort(String host, int preferredPort, int... reservedPorts) {
-        String hostToProbe = host == null || host.isBlank() ? DEFAULT_LISTEN_HOST : host.trim();
+        String hostToProbe = host == null || host.trim().isEmpty() ? DEFAULT_LISTEN_HOST : host.trim();
         int start = Math.max(MIN_PORT, Math.min(MAX_PORT, preferredPort));
 
         for (int port = start; port <= MAX_PORT; port++) {
@@ -2028,7 +2068,7 @@ final class ServerProxyRuntime {
         try (DatagramSocket socket = new DatagramSocket(null)) {
             socket.setReuseAddress(false);
             InetSocketAddress address;
-            if (host == null || host.isBlank() || "0.0.0.0".equals(host) || "::".equals(host)) {
+            if (host == null || host.trim().isEmpty() || "0.0.0.0".equals(host) || "::".equals(host)) {
                 address = new InetSocketAddress(port);
             } else {
                 address = new InetSocketAddress(InetAddress.getByName(host), port);
@@ -2041,7 +2081,7 @@ final class ServerProxyRuntime {
     }
 
     private static boolean isLocalHost(String host) {
-        if (host == null || host.isBlank()) {
+        if (host == null || host.trim().isEmpty()) {
             return true;
         }
         String normalized = host.trim().toLowerCase(Locale.ROOT);
@@ -2067,14 +2107,14 @@ final class ServerProxyRuntime {
         }
         String rawPort = props.getProperty("port");
         Integer parsedPort = parseSimpleVoiceChatPort(rawPort);
-        if (parsedPort == null && rawPort != null && !rawPort.isBlank()) {
+        if (parsedPort == null && rawPort != null && !rawPort.trim().isEmpty()) {
             LOGGER.warn("[zstdnet-server] invalid Simple Voice Chat port '{}' in {}", rawPort, configPath);
         }
         return parsedPort;
     }
 
     static Integer parseSimpleVoiceChatPort(String raw) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return null;
         }
         try {
@@ -2085,7 +2125,7 @@ final class ServerProxyRuntime {
     }
 
     private static HostPort parseOptionalHostPort(String raw) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return null;
         }
         try {
@@ -2100,7 +2140,7 @@ final class ServerProxyRuntime {
     }
 
     private int parseInt(String raw, int fallback) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return fallback;
         }
         try {
@@ -2111,7 +2151,7 @@ final class ServerProxyRuntime {
     }
 
     private long parseLong(String raw, long fallback) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return fallback;
         }
         try {
@@ -2126,7 +2166,7 @@ final class ServerProxyRuntime {
     }
 
     private Duration parseDuration(String raw, Duration fallback) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return fallback;
         }
         String text = raw.trim().toLowerCase(Locale.ROOT);
@@ -2165,7 +2205,8 @@ final class ServerProxyRuntime {
     }
 
     private String sourceIp(SocketAddress address) {
-        if (address instanceof InetSocketAddress inet) {
+        if (address instanceof InetSocketAddress) {
+            InetSocketAddress inet = (InetSocketAddress) address;
             InetAddress ip = inet.getAddress();
             return ip != null ? ip.getHostAddress() : inet.getHostString();
         }
@@ -2223,13 +2264,96 @@ final class ServerProxyRuntime {
     /**
      * PROXY protocol 解析结果模块。
      */
-    private record ProxyInfo(boolean valid, String sourceIp, int sourcePort, String targetIp, int targetPort) {
+    private static final class ProxyInfo {
+        private final boolean valid;
+        private final String sourceIp;
+        private final int sourcePort;
+        private final String targetIp;
+        private final int targetPort;
+
+        private ProxyInfo(boolean valid, String sourceIp, int sourcePort, String targetIp, int targetPort) {
+            this.valid = valid;
+            this.sourceIp = sourceIp;
+            this.sourcePort = sourcePort;
+            this.targetIp = targetIp;
+            this.targetPort = targetPort;
+        }
+
+        public boolean valid() { return this.valid; }
+        public String sourceIp() { return this.sourceIp; }
+        public int sourcePort() { return this.sourcePort; }
+        public String targetIp() { return this.targetIp; }
+        public int targetPort() { return this.targetPort; }
+
         static ProxyInfo invalid() {
             return new ProxyInfo(false, null, 0, null, 0);
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ProxyInfo)) {
+                return false;
+            }
+            ProxyInfo other = (ProxyInfo) o;
+            return this.valid == other.valid
+                && this.sourcePort == other.sourcePort
+                && this.targetPort == other.targetPort
+                && Objects.equals(this.sourceIp, other.sourceIp)
+                && Objects.equals(this.targetIp, other.targetIp);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(valid, sourceIp, sourcePort, targetIp, targetPort);
+        }
+
+        @Override
+        public String toString() {
+            return "ProxyInfo[valid=" + valid
+                + ", sourceIp=" + sourceIp
+                + ", sourcePort=" + sourcePort
+                + ", targetIp=" + targetIp
+                + ", targetPort=" + targetPort + "]";
+        }
     }
 
-    private record BindResult(ServerSocket listener, ProxyConfig config) {
+    private static final class BindResult {
+        private final ServerSocket listener;
+        private final ProxyConfig config;
+
+        private BindResult(ServerSocket listener, ProxyConfig config) {
+            this.listener = listener;
+            this.config = config;
+        }
+
+        public ServerSocket listener() { return this.listener; }
+        public ProxyConfig config() { return this.config; }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof BindResult)) {
+                return false;
+            }
+            BindResult other = (BindResult) o;
+            return Objects.equals(this.listener, other.listener)
+                && Objects.equals(this.config, other.config);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(listener, config);
+        }
+
+        @Override
+        public String toString() {
+            return "BindResult[listener=" + listener + ", config=" + config + "]";
+        }
     }
 
     /**
@@ -2246,63 +2370,289 @@ final class ServerProxyRuntime {
         LAN
     }
 
-    record HudSnapshot(
-        RuntimeMode mode,
-        String listenHost,
-        int listenPort,
-        long rawBytes,
-        long zstdBytes,
-        long rawUpBytes,
-        long rawDownBytes,
-        long zstdUpBytes,
-        long zstdDownBytes,
-        long rawUpRate,
-        long rawDownRate,
-        long zstdUpRate,
-        long zstdDownRate,
-        long rawRate,
-        long zstdRate,
-        double ratioPercent,
-        int connections
-    ) {
+    static final class HudSnapshot {
+        private final RuntimeMode mode;
+        private final String listenHost;
+        private final int listenPort;
+        private final long rawBytes;
+        private final long zstdBytes;
+        private final long rawUpBytes;
+        private final long rawDownBytes;
+        private final long zstdUpBytes;
+        private final long zstdDownBytes;
+        private final long rawUpRate;
+        private final long rawDownRate;
+        private final long zstdUpRate;
+        private final long zstdDownRate;
+        private final long rawRate;
+        private final long zstdRate;
+        private final double ratioPercent;
+        private final int connections;
+
+        HudSnapshot(
+            RuntimeMode mode,
+            String listenHost,
+            int listenPort,
+            long rawBytes,
+            long zstdBytes,
+            long rawUpBytes,
+            long rawDownBytes,
+            long zstdUpBytes,
+            long zstdDownBytes,
+            long rawUpRate,
+            long rawDownRate,
+            long zstdUpRate,
+            long zstdDownRate,
+            long rawRate,
+            long zstdRate,
+            double ratioPercent,
+            int connections
+        ) {
+            this.mode = mode;
+            this.listenHost = listenHost;
+            this.listenPort = listenPort;
+            this.rawBytes = rawBytes;
+            this.zstdBytes = zstdBytes;
+            this.rawUpBytes = rawUpBytes;
+            this.rawDownBytes = rawDownBytes;
+            this.zstdUpBytes = zstdUpBytes;
+            this.zstdDownBytes = zstdDownBytes;
+            this.rawUpRate = rawUpRate;
+            this.rawDownRate = rawDownRate;
+            this.zstdUpRate = zstdUpRate;
+            this.zstdDownRate = zstdDownRate;
+            this.rawRate = rawRate;
+            this.zstdRate = zstdRate;
+            this.ratioPercent = ratioPercent;
+            this.connections = connections;
+        }
+
+        public RuntimeMode mode() { return this.mode; }
+        public String listenHost() { return this.listenHost; }
+        public int listenPort() { return this.listenPort; }
+        public long rawBytes() { return this.rawBytes; }
+        public long zstdBytes() { return this.zstdBytes; }
+        public long rawUpBytes() { return this.rawUpBytes; }
+        public long rawDownBytes() { return this.rawDownBytes; }
+        public long zstdUpBytes() { return this.zstdUpBytes; }
+        public long zstdDownBytes() { return this.zstdDownBytes; }
+        public long rawUpRate() { return this.rawUpRate; }
+        public long rawDownRate() { return this.rawDownRate; }
+        public long zstdUpRate() { return this.zstdUpRate; }
+        public long zstdDownRate() { return this.zstdDownRate; }
+        public long rawRate() { return this.rawRate; }
+        public long zstdRate() { return this.zstdRate; }
+        public double ratioPercent() { return this.ratioPercent; }
+        public int connections() { return this.connections; }
+
         String modeName() {
             return mode.name();
         }
-    }
 
-    private record DetectedClientMode(ClientMode mode, byte[] initialWireData) {
-        private static DetectedClientMode zstd() {
-            return new DetectedClientMode(ClientMode.ZSTD, null);
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof HudSnapshot)) {
+                return false;
+            }
+            HudSnapshot other = (HudSnapshot) o;
+            return this.listenPort == other.listenPort
+                && this.rawBytes == other.rawBytes
+                && this.zstdBytes == other.zstdBytes
+                && this.rawUpBytes == other.rawUpBytes
+                && this.rawDownBytes == other.rawDownBytes
+                && this.zstdUpBytes == other.zstdUpBytes
+                && this.zstdDownBytes == other.zstdDownBytes
+                && this.rawUpRate == other.rawUpRate
+                && this.rawDownRate == other.rawDownRate
+                && this.zstdUpRate == other.zstdUpRate
+                && this.zstdDownRate == other.zstdDownRate
+                && this.rawRate == other.rawRate
+                && this.zstdRate == other.zstdRate
+                && Double.compare(this.ratioPercent, other.ratioPercent) == 0
+                && this.connections == other.connections
+                && this.mode == other.mode
+                && Objects.equals(this.listenHost, other.listenHost);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mode, listenHost, listenPort, rawBytes, zstdBytes, rawUpBytes, rawDownBytes,
+                zstdUpBytes, zstdDownBytes, rawUpRate, rawDownRate, zstdUpRate, zstdDownRate, rawRate, zstdRate,
+                ratioPercent, connections);
+        }
+
+        @Override
+        public String toString() {
+            return "HudSnapshot[mode=" + mode
+                + ", listenHost=" + listenHost
+                + ", listenPort=" + listenPort
+                + ", rawBytes=" + rawBytes
+                + ", zstdBytes=" + zstdBytes
+                + ", rawUpBytes=" + rawUpBytes
+                + ", rawDownBytes=" + rawDownBytes
+                + ", zstdUpBytes=" + zstdUpBytes
+                + ", zstdDownBytes=" + zstdDownBytes
+                + ", rawUpRate=" + rawUpRate
+                + ", rawDownRate=" + rawDownRate
+                + ", zstdUpRate=" + zstdUpRate
+                + ", zstdDownRate=" + zstdDownRate
+                + ", rawRate=" + rawRate
+                + ", zstdRate=" + zstdRate
+                + ", ratioPercent=" + ratioPercent
+                + ", connections=" + connections + "]";
         }
     }
 
-    private record ProxyConfig(
-        boolean enabled,
-        boolean autoTakeover,
-        HostPort listen,
-        HostPort target,
-        boolean voiceChatPassthrough,
-        String voiceChatListen,
-        String voiceChatTarget,
-        int level,
-        int maxConnPerIp,
-        int maxReqPerWindow,
-        Duration window,
-        Duration banDuration,
-        Duration statsInterval,
-        Duration flushInterval,
-        Duration idleTimeout,
-        long maxRatePerConnBps,
-        long maxRateGlobalBps,
-        int burstBytes,
-        boolean trustProxyProtocol,
-        Set<String> trustedProxyIps,
-        CompressionOptions compression,
-        String voiceTransport,
-        String extraUdpPorts,
-        TransformOptions transform,
-        CacheMode chunkCache
-    ) {
+    private static final class DetectedClientMode {
+        private final ClientMode mode;
+        private final byte[] initialWireData;
+
+        private DetectedClientMode(ClientMode mode, byte[] initialWireData) {
+            this.mode = mode;
+            this.initialWireData = initialWireData;
+        }
+
+        public ClientMode mode() { return this.mode; }
+        public byte[] initialWireData() { return this.initialWireData; }
+
+        private static DetectedClientMode zstd() {
+            return new DetectedClientMode(ClientMode.ZSTD, null);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof DetectedClientMode)) {
+                return false;
+            }
+            DetectedClientMode other = (DetectedClientMode) o;
+            return this.mode == other.mode
+                && Objects.equals(this.initialWireData, other.initialWireData);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mode, initialWireData);
+        }
+
+        @Override
+        public String toString() {
+            return "DetectedClientMode[mode=" + mode + ", initialWireData=" + initialWireData + "]";
+        }
+    }
+
+    private static final class ProxyConfig {
+        private final boolean enabled;
+        private final boolean autoTakeover;
+        private final HostPort listen;
+        private final HostPort target;
+        private final boolean voiceChatPassthrough;
+        private final String voiceChatListen;
+        private final String voiceChatTarget;
+        private final int level;
+        private final int maxConnPerIp;
+        private final int maxReqPerWindow;
+        private final Duration window;
+        private final Duration banDuration;
+        private final Duration statsInterval;
+        private final Duration flushInterval;
+        private final Duration idleTimeout;
+        private final long maxRatePerConnBps;
+        private final long maxRateGlobalBps;
+        private final int burstBytes;
+        private final boolean trustProxyProtocol;
+        private final Set<String> trustedProxyIps;
+        private final CompressionOptions compression;
+        private final String voiceTransport;
+        private final String extraUdpPorts;
+        private final TransformOptions transform;
+        private final CacheMode chunkCache;
+
+        private ProxyConfig(
+            boolean enabled,
+            boolean autoTakeover,
+            HostPort listen,
+            HostPort target,
+            boolean voiceChatPassthrough,
+            String voiceChatListen,
+            String voiceChatTarget,
+            int level,
+            int maxConnPerIp,
+            int maxReqPerWindow,
+            Duration window,
+            Duration banDuration,
+            Duration statsInterval,
+            Duration flushInterval,
+            Duration idleTimeout,
+            long maxRatePerConnBps,
+            long maxRateGlobalBps,
+            int burstBytes,
+            boolean trustProxyProtocol,
+            Set<String> trustedProxyIps,
+            CompressionOptions compression,
+            String voiceTransport,
+            String extraUdpPorts,
+            TransformOptions transform,
+            CacheMode chunkCache
+        ) {
+            this.enabled = enabled;
+            this.autoTakeover = autoTakeover;
+            this.listen = listen;
+            this.target = target;
+            this.voiceChatPassthrough = voiceChatPassthrough;
+            this.voiceChatListen = voiceChatListen;
+            this.voiceChatTarget = voiceChatTarget;
+            this.level = level;
+            this.maxConnPerIp = maxConnPerIp;
+            this.maxReqPerWindow = maxReqPerWindow;
+            this.window = window;
+            this.banDuration = banDuration;
+            this.statsInterval = statsInterval;
+            this.flushInterval = flushInterval;
+            this.idleTimeout = idleTimeout;
+            this.maxRatePerConnBps = maxRatePerConnBps;
+            this.maxRateGlobalBps = maxRateGlobalBps;
+            this.burstBytes = burstBytes;
+            this.trustProxyProtocol = trustProxyProtocol;
+            this.trustedProxyIps = trustedProxyIps;
+            this.compression = compression;
+            this.voiceTransport = voiceTransport;
+            this.extraUdpPorts = extraUdpPorts;
+            this.transform = transform;
+            this.chunkCache = chunkCache;
+        }
+
+        public boolean enabled() { return this.enabled; }
+        public boolean autoTakeover() { return this.autoTakeover; }
+        public HostPort listen() { return this.listen; }
+        public HostPort target() { return this.target; }
+        public boolean voiceChatPassthrough() { return this.voiceChatPassthrough; }
+        public String voiceChatListen() { return this.voiceChatListen; }
+        public String voiceChatTarget() { return this.voiceChatTarget; }
+        public int level() { return this.level; }
+        public int maxConnPerIp() { return this.maxConnPerIp; }
+        public int maxReqPerWindow() { return this.maxReqPerWindow; }
+        public Duration window() { return this.window; }
+        public Duration banDuration() { return this.banDuration; }
+        public Duration statsInterval() { return this.statsInterval; }
+        public Duration flushInterval() { return this.flushInterval; }
+        public Duration idleTimeout() { return this.idleTimeout; }
+        public long maxRatePerConnBps() { return this.maxRatePerConnBps; }
+        public long maxRateGlobalBps() { return this.maxRateGlobalBps; }
+        public int burstBytes() { return this.burstBytes; }
+        public boolean trustProxyProtocol() { return this.trustProxyProtocol; }
+        public Set<String> trustedProxyIps() { return this.trustedProxyIps; }
+        public CompressionOptions compression() { return this.compression; }
+        public String voiceTransport() { return this.voiceTransport; }
+        public String extraUdpPorts() { return this.extraUdpPorts; }
+        public TransformOptions transform() { return this.transform; }
+        public CacheMode chunkCache() { return this.chunkCache; }
+
         private ProxyConfig withTarget(HostPort newTarget) {
             return new ProxyConfig(
                 enabled,
@@ -2432,11 +2782,84 @@ final class ServerProxyRuntime {
         }
 
         private static boolean isDefaultVoiceChatListen(String raw) {
-            return raw == null || raw.isBlank();
+            return raw == null || raw.trim().isEmpty();
         }
 
         private static boolean isDefaultVoiceChatTarget(String raw) {
-            return raw == null || raw.isBlank();
+            return raw == null || raw.trim().isEmpty();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ProxyConfig)) {
+                return false;
+            }
+            ProxyConfig other = (ProxyConfig) o;
+            return this.enabled == other.enabled
+                && this.autoTakeover == other.autoTakeover
+                && this.voiceChatPassthrough == other.voiceChatPassthrough
+                && this.level == other.level
+                && this.maxConnPerIp == other.maxConnPerIp
+                && this.maxReqPerWindow == other.maxReqPerWindow
+                && this.maxRatePerConnBps == other.maxRatePerConnBps
+                && this.maxRateGlobalBps == other.maxRateGlobalBps
+                && this.burstBytes == other.burstBytes
+                && this.trustProxyProtocol == other.trustProxyProtocol
+                && Objects.equals(this.listen, other.listen)
+                && Objects.equals(this.target, other.target)
+                && Objects.equals(this.voiceChatListen, other.voiceChatListen)
+                && Objects.equals(this.voiceChatTarget, other.voiceChatTarget)
+                && Objects.equals(this.window, other.window)
+                && Objects.equals(this.banDuration, other.banDuration)
+                && Objects.equals(this.statsInterval, other.statsInterval)
+                && Objects.equals(this.flushInterval, other.flushInterval)
+                && Objects.equals(this.idleTimeout, other.idleTimeout)
+                && Objects.equals(this.trustedProxyIps, other.trustedProxyIps)
+                && Objects.equals(this.compression, other.compression)
+                && Objects.equals(this.voiceTransport, other.voiceTransport)
+                && Objects.equals(this.extraUdpPorts, other.extraUdpPorts)
+                && Objects.equals(this.transform, other.transform)
+                && Objects.equals(this.chunkCache, other.chunkCache);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(enabled, autoTakeover, listen, target, voiceChatPassthrough, voiceChatListen,
+                voiceChatTarget, level, maxConnPerIp, maxReqPerWindow, window, banDuration, statsInterval,
+                flushInterval, idleTimeout, maxRatePerConnBps, maxRateGlobalBps, burstBytes, trustProxyProtocol,
+                trustedProxyIps, compression, voiceTransport, extraUdpPorts, transform, chunkCache);
+        }
+
+        @Override
+        public String toString() {
+            return "ProxyConfig[enabled=" + enabled
+                + ", autoTakeover=" + autoTakeover
+                + ", listen=" + listen
+                + ", target=" + target
+                + ", voiceChatPassthrough=" + voiceChatPassthrough
+                + ", voiceChatListen=" + voiceChatListen
+                + ", voiceChatTarget=" + voiceChatTarget
+                + ", level=" + level
+                + ", maxConnPerIp=" + maxConnPerIp
+                + ", maxReqPerWindow=" + maxReqPerWindow
+                + ", window=" + window
+                + ", banDuration=" + banDuration
+                + ", statsInterval=" + statsInterval
+                + ", flushInterval=" + flushInterval
+                + ", idleTimeout=" + idleTimeout
+                + ", maxRatePerConnBps=" + maxRatePerConnBps
+                + ", maxRateGlobalBps=" + maxRateGlobalBps
+                + ", burstBytes=" + burstBytes
+                + ", trustProxyProtocol=" + trustProxyProtocol
+                + ", trustedProxyIps=" + trustedProxyIps
+                + ", compression=" + compression
+                + ", voiceTransport=" + voiceTransport
+                + ", extraUdpPorts=" + extraUdpPorts
+                + ", transform=" + transform
+                + ", chunkCache=" + chunkCache + "]";
         }
 
     }
@@ -2444,10 +2867,61 @@ final class ServerProxyRuntime {
     /**
      * host:port 解析模块（支持 IPv6/默认端口/去尾点）。
      */
-    static record UdpRoute(String label, HostPort listen, HostPort target) {
+    static final class UdpRoute {
+        private final String label;
+        private final HostPort listen;
+        private final HostPort target;
+
+        UdpRoute(String label, HostPort listen, HostPort target) {
+            this.label = label;
+            this.listen = listen;
+            this.target = target;
+        }
+
+        public String label() { return this.label; }
+        public HostPort listen() { return this.listen; }
+        public HostPort target() { return this.target; }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof UdpRoute)) {
+                return false;
+            }
+            UdpRoute other = (UdpRoute) o;
+            return Objects.equals(this.label, other.label)
+                && Objects.equals(this.listen, other.listen)
+                && Objects.equals(this.target, other.target);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(label, listen, target);
+        }
+
+        @Override
+        public String toString() {
+            return "UdpRoute[label=" + label + ", listen=" + listen + ", target=" + target + "]";
+        }
     }
 
-    static record VoiceChatPassthroughDecision(UdpRoute route, boolean reuseGameRoute, String reason) {
+    static final class VoiceChatPassthroughDecision {
+        private final UdpRoute route;
+        private final boolean reuseGameRoute;
+        private final String reason;
+
+        VoiceChatPassthroughDecision(UdpRoute route, boolean reuseGameRoute, String reason) {
+            this.route = route;
+            this.reuseGameRoute = reuseGameRoute;
+            this.reason = reason;
+        }
+
+        public UdpRoute route() { return this.route; }
+        public boolean reuseGameRoute() { return this.reuseGameRoute; }
+        public String reason() { return this.reason; }
+
         static VoiceChatPassthroughDecision disabled(String reason) {
             return new VoiceChatPassthroughDecision(null, false, reason);
         }
@@ -2459,11 +2933,48 @@ final class ServerProxyRuntime {
         static VoiceChatPassthroughDecision route(UdpRoute route) {
             return new VoiceChatPassthroughDecision(route, false, null);
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof VoiceChatPassthroughDecision)) {
+                return false;
+            }
+            VoiceChatPassthroughDecision other = (VoiceChatPassthroughDecision) o;
+            return this.reuseGameRoute == other.reuseGameRoute
+                && Objects.equals(this.route, other.route)
+                && Objects.equals(this.reason, other.reason);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(route, reuseGameRoute, reason);
+        }
+
+        @Override
+        public String toString() {
+            return "VoiceChatPassthroughDecision[route=" + route
+                + ", reuseGameRoute=" + reuseGameRoute
+                + ", reason=" + reason + "]";
+        }
     }
 
-    static record HostPort(String host, int port) {
+    static final class HostPort {
+        private final String host;
+        private final int port;
+
+        HostPort(String host, int port) {
+            this.host = host;
+            this.port = port;
+        }
+
+        public String host() { return this.host; }
+        public int port() { return this.port; }
+
         static HostPort parse(String raw) {
-            if (raw == null || raw.isBlank()) {
+            if (raw == null || raw.trim().isEmpty()) {
                 throw new IllegalArgumentException("empty host:port");
             }
             String value = raw.trim();
@@ -2498,6 +3009,28 @@ final class ServerProxyRuntime {
                 h = h.substring(0, h.length() - 1);
             }
             return h;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof HostPort)) {
+                return false;
+            }
+            HostPort other = (HostPort) o;
+            return this.port == other.port && Objects.equals(this.host, other.host);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(host, port);
+        }
+
+        @Override
+        public String toString() {
+            return "HostPort[host=" + host + ", port=" + port + "]";
         }
     }
 
@@ -2645,13 +3178,13 @@ final class ServerProxyRuntime {
         // 语音 UDP 与游戏 UDP 共用同一个公网入口端口（见 VoiceTunnelFrame）。
         // bridge / off：game forwarder 不带语音通道，语音由客户端直连真实服务器同端口（或不处理）。
         List<HostPort> tunnelTargets = plan.isTunnel()
-            ? plan.ports().stream().map(p -> new HostPort("127.0.0.1", p)).toList()
-            : List.of();
+            ? plan.ports().stream().map(p -> new HostPort("127.0.0.1", p)).collect(Collectors.toList())
+            : Collections.emptyList();
 
         List<UdpRoute> routes = buildUdpRoutes(config, plan);
         List<UdpForwarder> started = new ArrayList<>();
         for (UdpRoute route : routes) {
-            List<HostPort> voiceChannels = "game".equals(route.label()) ? tunnelTargets : List.of();
+            List<HostPort> voiceChannels = "game".equals(route.label()) ? tunnelTargets : Collections.emptyList();
             try {
                 UdpForwarder forwarder = new UdpForwarder(route, voiceChannels);
                 forwarder.start();
@@ -2687,7 +3220,7 @@ final class ServerProxyRuntime {
         String transport = normalizeVoiceTransport(config.voiceTransport);
         List<VoicePortDetector.VoicePort> detected =
             VoicePortDetector.detect(Platforms.get().voiceConfigRoots(), config.target.port(), config.extraUdpPorts);
-        List<Integer> ports = detected.stream().map(VoicePortDetector.VoicePort::port).toList();
+        List<Integer> ports = detected.stream().map(VoicePortDetector.VoicePort::port).collect(Collectors.toList());
         if (!ports.isEmpty()) {
             LOGGER.info("[zstdnet-server] voice ports detected (transport={}): {}", transport, ports);
         }
@@ -2741,7 +3274,7 @@ final class ServerProxyRuntime {
 
     private void stopUdpForwarders() {
         List<UdpForwarder> forwarders = this.udpForwarders;
-        this.udpForwarders = List.of();
+        this.udpForwarders = Collections.emptyList();
         for (UdpForwarder forwarder : forwarders) {
             try {
                 forwarder.stop();
@@ -2766,7 +3299,7 @@ final class ServerProxyRuntime {
 
         UdpForwarder(UdpRoute route, List<HostPort> voiceTargets) {
             this.route = route;
-            this.voiceTargets = voiceTargets == null ? List.of() : List.copyOf(voiceTargets);
+            this.voiceTargets = voiceTargets == null ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(voiceTargets));
         }
 
         void start() throws IOException {
@@ -2937,7 +3470,40 @@ final class ServerProxyRuntime {
             });
         }
 
-        private record SessionKey(SocketAddress clientAddr, int channel) {
+        private static final class SessionKey {
+            private final SocketAddress clientAddr;
+            private final int channel;
+
+            private SessionKey(SocketAddress clientAddr, int channel) {
+                this.clientAddr = clientAddr;
+                this.channel = channel;
+            }
+
+            public SocketAddress clientAddr() { return this.clientAddr; }
+            public int channel() { return this.channel; }
+
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) {
+                    return true;
+                }
+                if (!(o instanceof SessionKey)) {
+                    return false;
+                }
+                SessionKey other = (SessionKey) o;
+                return this.channel == other.channel
+                    && Objects.equals(this.clientAddr, other.clientAddr);
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(clientAddr, channel);
+            }
+
+            @Override
+            public String toString() {
+                return "SessionKey[clientAddr=" + clientAddr + ", channel=" + channel + "]";
+            }
         }
 
         private static final class UdpSession {

@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -85,8 +86,8 @@ class VoicePortDetectorTest {
 
     @Test
     void extraPortsParsedAndInvalidSkipped() {
-        assertEquals(List.of(24454, 30000), VoicePortDetector.parseExtraPorts("24454, 30000"));
-        assertEquals(List.of(24454), VoicePortDetector.parseExtraPorts("24454 abc 99999"));
+        assertEquals(Arrays.asList(24454, 30000), VoicePortDetector.parseExtraPorts("24454, 30000"));
+        assertEquals(Arrays.asList(24454), VoicePortDetector.parseExtraPorts("24454 abc 99999"));
         assertTrue(VoicePortDetector.parseExtraPorts("").isEmpty());
         assertTrue(VoicePortDetector.parseExtraPorts(null).isEmpty());
     }
@@ -98,12 +99,12 @@ class VoicePortDetectorTest {
         // SVC independent 24454
         Path svc = configDir.resolve("voicechat").resolve("voicechat-server.properties");
         Files.createDirectories(svc.getParent());
-        Files.writeString(svc, "port=24454\n", StandardCharsets.UTF_8);
+        Files.write(svc, "port=24454\n".getBytes(StandardCharsets.UTF_8));
 
         // Plasmo independent 24455
         Path plasmo = configDir.resolve("plasmovoice").resolve("config.toml");
         Files.createDirectories(plasmo.getParent());
-        Files.writeString(plasmo, "[host]\nport = 24455\n", StandardCharsets.UTF_8);
+        Files.write(plasmo, "[host]\nport = 24455\n".getBytes(StandardCharsets.UTF_8));
 
         // extra duplicates 24454 (deduped) + adds 30000
         List<VoicePortDetector.VoicePort> ports = VoicePortDetector.detect(configDir, 25566, "24454,30000");
@@ -120,7 +121,7 @@ class VoicePortDetectorTest {
     void detectSkipsSamePortEqualToBackendGamePort(@TempDir Path configDir) throws Exception {
         Path svc = configDir.resolve("voicechat").resolve("voicechat-server.properties");
         Files.createDirectories(svc.getParent());
-        Files.writeString(svc, "port=25566\n", StandardCharsets.UTF_8);
+        Files.write(svc, "port=25566\n".getBytes(StandardCharsets.UTF_8));
 
         // backendGamePort == 25566 → the SVC port is same-port, must be skipped.
         List<VoicePortDetector.VoicePort> ports = VoicePortDetector.detect(configDir, 25566, "");
@@ -139,14 +140,14 @@ class VoicePortDetectorTest {
         // SVC plugin: plugins/voicechat/voicechat-server.properties (子目录名与 mod 端一致)
         Path svc = pluginsRoot.resolve("voicechat").resolve("voicechat-server.properties");
         Files.createDirectories(svc.getParent());
-        Files.writeString(svc, "port=24454\n", StandardCharsets.UTF_8);
+        Files.write(svc, "port=24454\n".getBytes(StandardCharsets.UTF_8));
 
         // Plasmo plugin: plugins/PlasmoVoice/config.toml (驼峰目录名，区别于 mod 端的 plasmovoice)
         Path plasmo = pluginsRoot.resolve("PlasmoVoice").resolve("config.toml");
         Files.createDirectories(plasmo.getParent());
-        Files.writeString(plasmo, "[host]\nport = 24455\n", StandardCharsets.UTF_8);
+        Files.write(plasmo, "[host]\nport = 24455\n".getBytes(StandardCharsets.UTF_8));
 
-        List<VoicePortDetector.VoicePort> ports = VoicePortDetector.detect(List.of(pluginsRoot), 25566, "");
+        List<VoicePortDetector.VoicePort> ports = VoicePortDetector.detect(Arrays.asList(pluginsRoot), 25566, "");
 
         assertEquals(2, ports.size());
         assertEquals(24454, ports.get(0).port());

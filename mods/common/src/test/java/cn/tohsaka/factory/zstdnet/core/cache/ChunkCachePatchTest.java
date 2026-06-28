@@ -26,6 +26,9 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -53,13 +56,13 @@ class ChunkCachePatchTest {
         byte[] mod = chunkFrame(5, 7, smallEdit(data(8000, 1)));
         byte[] in = concat(base, mod);
 
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, true);
         byte[] wire = e.run(in);
 
         assertEquals(1, e.cos.fullBlocks, "base chunk is FULL");
         assertEquals(1, e.cos.patchBlocks, "modified chunk at same position is PATCH");
         assertEquals(0, e.cos.refBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
         assertTrue(wire.length < base.length + mod.length / 2,
             "PATCH must be far smaller than re-sending the whole modified chunk; wire=" + wire.length);
     }
@@ -71,12 +74,12 @@ class ChunkCachePatchTest {
         byte[] in = concat(base, mod);
 
         // v2 协商：不应发 PATCH（旧客户端解不了 0x05）。
-        Enc e = new Enc(BUDGET, Set.of(), ChunkCacheFormat.VERSION_MANIFEST, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), ChunkCacheFormat.VERSION_MANIFEST, 0, true);
         byte[] wire = e.run(in);
 
         assertEquals(0, e.cos.patchBlocks, "v2 must never emit PATCH");
         assertEquals(2, e.cos.fullBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -86,12 +89,12 @@ class ChunkCachePatchTest {
         byte[] in = concat(base, mod);
 
         // 生效版本 v3 但 patchEnabled=false（对应 mode=ref）。
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, false);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, false);
         byte[] wire = e.run(in);
 
         assertEquals(0, e.cos.patchBlocks);
         assertEquals(2, e.cos.fullBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -100,12 +103,12 @@ class ChunkCachePatchTest {
         byte[] mod = chunkFrame(5, 7, data(8000, 999)); // 全然不同 → 增量 ≈ 全帧 → 不划算
         byte[] in = concat(base, mod);
 
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, true);
         byte[] wire = e.run(in);
 
         assertEquals(0, e.cos.patchBlocks, "unrelated chunk must not PATCH (ratio guard)");
         assertEquals(2, e.cos.fullBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -114,12 +117,12 @@ class ChunkCachePatchTest {
         byte[] b = chunkFrame(2, 2, smallEdit(data(8000, 5))); // 内容相似，但坐标不同 → 不跨坐标 PATCH
         byte[] in = concat(a, b);
 
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, true);
         byte[] wire = e.run(in);
 
         assertEquals(0, e.cos.patchBlocks);
         assertEquals(2, e.cos.fullBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -128,7 +131,7 @@ class ChunkCachePatchTest {
         ChunkCacheCodec.writePreamble(bad, V3);
         // 基线 0x1234 不在客户端会话内缓存 → 解码端 peek miss → fail-closed（delta 是什么不影响）。
         ChunkCacheCodec.writePatch(bad, 0x1234L, 0x5678L, new byte[]{0x02, 0x01, 0x41});
-        assertThrows(IOException.class, () -> decode(bad.toByteArray(), BUDGET, Map.of()));
+        assertThrows(IOException.class, () -> decode(bad.toByteArray(), BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -137,14 +140,14 @@ class ChunkCachePatchTest {
         byte[] mod = chunkFrame(5, 7, smallEdit(data(8000, 6)));
         byte[] in = concat(base, mod);
 
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, true);
         byte[] wire = e.run(in);
         assertEquals(1, e.cos.patchBlocks);
 
         // 翻转 PATCH 区（流尾）的一个字节 → 重建结果与 newHash 不符 → fail-closed。
         byte[] corrupt = wire.clone();
         corrupt[corrupt.length - 1] ^= 0xFF;
-        assertThrows(IOException.class, () -> decode(corrupt, BUDGET, Map.of()));
+        assertThrows(IOException.class, () -> decode(corrupt, BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -152,20 +155,22 @@ class ChunkCachePatchTest {
         int n = ChunkCacheFormat.DEFAULT_PATCH_CHAIN_BUDGET + 6; // 70
         ByteArrayOutputStream inBuf = new ByteArrayOutputStream();
         byte[] cur = data(8000, 7);
-        inBuf.writeBytes(chunkFrame(9, 9, cur));
+        byte[] firstFrame = chunkFrame(9, 9, cur);
+        inBuf.write(firstFrame, 0, firstFrame.length);
         for (int k = 1; k < n; k++) {
             cur = nudge(cur, k); // 与上一帧仅差一小段
-            inBuf.writeBytes(chunkFrame(9, 9, cur));
+            byte[] frame = chunkFrame(9, 9, cur);
+            inBuf.write(frame, 0, frame.length);
         }
         byte[] in = inBuf.toByteArray();
 
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, true);
         byte[] wire = e.run(in);
 
         // 1 个起始 FULL + 64 个 PATCH 后强制重锚 FULL，再继续 PATCH。
         assertEquals(2, e.cos.fullBlocks, "chain budget should force exactly one re-anchor FULL");
         assertEquals(n - 2, e.cos.patchBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -179,8 +184,8 @@ class ChunkCachePatchTest {
         byte[] in = concat(a, aAgain, aEdit, w, b);
 
         Hash128 wh = Hashing.content128(w);
-        Set<Hash128> warm = Set.of(wh);
-        Map<Hash128, byte[]> warmMap = Map.of(wh, w);
+        Set<Hash128> warm = new LinkedHashSet<>(Arrays.asList(wh));
+        Map<Hash128, byte[]> warmMap = Collections.singletonMap(wh, w);
 
         Enc e = new Enc(BUDGET, warm, V3, 0, true);
         byte[] wire = e.run(in);
@@ -200,12 +205,12 @@ class ChunkCachePatchTest {
         byte[] f2 = chunkFrame(4, 4, smallEditAt(smallEditAt(data(8000, 9), 1000), 2000));
         byte[] in = concat(f0, f1, f2);
 
-        Enc e = new Enc(BUDGET, Set.of(), V3, 0, true);
+        Enc e = new Enc(BUDGET, Collections.emptySet(), V3, 0, true);
         byte[] wire = e.run(in);
 
         assertEquals(1, e.cos.fullBlocks);
         assertEquals(2, e.cos.patchBlocks);
-        assertArrayEquals(in, decode(wire, BUDGET, Map.of()));
+        assertArrayEquals(in, decode(wire, BUDGET, Collections.emptyMap()));
     }
 
     // ---- helpers ----
@@ -285,7 +290,7 @@ class ChunkCachePatchTest {
     private static byte[] concat(byte[]... arrays) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] a : arrays) {
-            out.writeBytes(a);
+            out.write(a, 0, a.length);
         }
         return out.toByteArray();
     }

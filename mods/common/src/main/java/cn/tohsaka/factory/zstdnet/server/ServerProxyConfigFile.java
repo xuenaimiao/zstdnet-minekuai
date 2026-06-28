@@ -28,6 +28,8 @@ import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Properties;
 import java.util.Set;
@@ -45,7 +47,7 @@ public final class ServerProxyConfigFile {
     private static final String DEFAULT_VOICE_CHAT_LISTEN = DEFAULT_LISTEN_HOST + ":" + DEFAULT_VOICE_CHAT_LISTEN_PORT;
     private static final String DEFAULT_VOICE_TRANSPORT = "tunnel";
     private static final String DEFAULT_TRUSTED_PROXY_IPS = "127.0.0.1,::1,0:0:0:0:0:0:0:1";
-    private static final Set<String> KNOWN_KEYS = Set.of(
+    private static final Set<String> KNOWN_KEYS = Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(
         "enabled",
         "auto_takeover",
         "listen",
@@ -83,7 +85,7 @@ public final class ServerProxyConfigFile {
         "premium_verification_mode",
         "premium_session_server",
         "premium_pass_real_ip"
-    );
+    )));
     private static final String DEFAULT_PREMIUM_VERIFICATION = "auto";
     private static final String DEFAULT_PREMIUM_VERIFICATION_MODE = "lenient";
 
@@ -283,7 +285,7 @@ public final class ServerProxyConfigFile {
         }
 
         try {
-            String text = stripUtf8Bom(Files.readString(path, StandardCharsets.UTF_8));
+            String text = stripUtf8Bom(new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
             try (Reader reader = new StringReader(text)) {
                 props.load(reader);
             }
@@ -344,7 +346,7 @@ public final class ServerProxyConfigFile {
     }
 
     private static boolean isCommentFragmentKey(String key, String value) {
-        String normalizedKey = key.stripLeading();
+        String normalizedKey = stripLeading(key);
         if (normalizedKey.startsWith("#")
             || normalizedKey.startsWith("!")
             || normalizedKey.startsWith("\u00EF\u00BB\u00BF#")
@@ -352,15 +354,25 @@ public final class ServerProxyConfigFile {
             return true;
         }
 
-        String normalizedValue = value == null ? "" : value.stripLeading();
+        String normalizedValue = value == null ? "" : stripLeading(value);
         return normalizedKey.endsWith("#") && normalizedValue.startsWith("---");
+    }
+
+    /** Java 8 \u4E0B\u884C\u66FF\u4EE3 {@code String.stripLeading()}\uFF1A\u53BB\u6389\u5F00\u5934\u7684\uFF08Unicode\uFF09\u7A7A\u767D\u5B57\u7B26\u3002 */
+    private static String stripLeading(String s) {
+        int i = 0;
+        int len = s.length();
+        while (i < len && Character.isWhitespace(s.charAt(i))) {
+            i++;
+        }
+        return s.substring(i);
     }
 
     private static String detectLineSeparator(Path path) throws IOException {
         if (!Files.exists(path)) {
             return System.lineSeparator();
         }
-        String text = Files.readString(path, StandardCharsets.UTF_8);
+        String text = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
         return text.contains("\r\n") ? "\r\n" : "\n";
     }
 
@@ -606,7 +618,7 @@ public final class ServerProxyConfigFile {
             }
         }
 
-        Files.writeString(path, withUtf8Bom(builder.toString()), StandardCharsets.UTF_8);
+        Files.write(path, withUtf8Bom(builder.toString()).getBytes(StandardCharsets.UTF_8));
     }
 
     private static void appendLine(StringBuilder builder, String line, String lineSeparator) {

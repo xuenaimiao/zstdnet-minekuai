@@ -26,6 +26,9 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,14 +50,14 @@ class ChunkCacheWarmTest {
     void warmRefRoundTripsAndShrinks() throws IOException {
         byte[] chunk = frame(FULL_CHUNK_ID, body(8000, 5));
         Hash128 h = Hashing.content128(chunk);
-        Set<Hash128> warm = Set.of(h);
-        Map<Hash128, byte[]> warmMap = Map.of(h, chunk);
+        Set<Hash128> warm = new LinkedHashSet<>(Arrays.asList(h));
+        Map<Hash128, byte[]> warmMap = Collections.singletonMap(h, chunk);
         byte[] in = concat(chunk, chunk); // 客户端已持有 → 两次都 WARM_REF（首次就不传整块）
 
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         CacheTransformingOutputStream cos =
             new CacheTransformingOutputStream(encoded, TABLE, BUDGET, warm, ChunkCacheFormat.VERSION_MANIFEST, 0);
-        try (cos) {
+        try (CacheTransformingOutputStream ignored = cos) {
             cos.write(in, 0, in.length);
             cos.flush();
         }
@@ -72,27 +75,27 @@ class ChunkCacheWarmTest {
         ChunkCacheCodec.writePreamble(bad, ChunkCacheFormat.VERSION_MANIFEST);
         ChunkCacheCodec.writeWarmRef(bad, new Hash128(0xDEADL, 0xBEEFL));
         // 客户端 warm 快照里没有这个 hash → fail-closed。
-        assertThrows(IOException.class, () -> decodeWarm(bad.toByteArray(), BUDGET, Map.of()));
+        assertThrows(IOException.class, () -> decodeWarm(bad.toByteArray(), BUDGET, Collections.emptyMap()));
     }
 
     @Test
     void warmDisabledBelowV2() throws IOException {
         byte[] chunk = frame(FULL_CHUNK_ID, body(2000, 3));
         Hash128 h = Hashing.content128(chunk);
-        Set<Hash128> warm = Set.of(h);
+        Set<Hash128> warm = new LinkedHashSet<>(Arrays.asList(h));
         byte[] in = concat(chunk, chunk);
 
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         CacheTransformingOutputStream cos =
             new CacheTransformingOutputStream(encoded, TABLE, BUDGET, warm, ChunkCacheFormat.VERSION_REF, 0);
-        try (cos) {
+        try (CacheTransformingOutputStream ignored = cos) {
             cos.write(in, 0, in.length);
             cos.flush();
         }
         assertEquals(0, cos.warmRefBlocks, "v1 must not emit WARM_REF even if warm set has it");
         assertEquals(1, cos.fullBlocks);
         assertEquals(1, cos.refBlocks); // 退化为会话内 REF
-        assertArrayEquals(in, decodeWarm(encoded.toByteArray(), BUDGET, Map.of()));
+        assertArrayEquals(in, decodeWarm(encoded.toByteArray(), BUDGET, Collections.emptyMap()));
     }
 
     @Test
@@ -100,18 +103,19 @@ class ChunkCacheWarmTest {
         int window = 4;
         ByteArrayOutputStream inBuf = new ByteArrayOutputStream();
         for (int i = 0; i < 30; i++) {
-            inBuf.writeBytes(frame(FULL_CHUNK_ID, body(2000, 100 + i))); // 30 个互异区块（全新）
+            byte[] f = frame(FULL_CHUNK_ID, body(2000, 100 + i)); // 30 个互异区块（全新）
+            inBuf.write(f, 0, f.length);
         }
         byte[] in = inBuf.toByteArray();
 
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         CacheTransformingOutputStream cos =
-            new CacheTransformingOutputStream(encoded, TABLE, BUDGET, Set.of(), ChunkCacheFormat.VERSION_MANIFEST, window);
-        try (cos) {
+            new CacheTransformingOutputStream(encoded, TABLE, BUDGET, Collections.emptySet(), ChunkCacheFormat.VERSION_MANIFEST, window);
+        try (CacheTransformingOutputStream ignored = cos) {
             cos.write(in, 0, in.length);
             cos.flush();
         }
-        assertArrayEquals(in, decodeWarm(encoded.toByteArray(), BUDGET, Map.of()), "bypass must stay byte-identical");
+        assertArrayEquals(in, decodeWarm(encoded.toByteArray(), BUDGET, Collections.emptyMap()), "bypass must stay byte-identical");
         assertTrue(cos.bypassedFrames > 0, "bypass should engage on all-new terrain");
         assertTrue(cos.fullBlocks < 30, "bypass should avoid FULL'ing most never-repeated chunks; full=" + cos.fullBlocks);
     }
@@ -120,19 +124,20 @@ class ChunkCacheWarmTest {
     void bypassDisabledByDefaultFullsEveryNewChunk() throws IOException {
         ByteArrayOutputStream inBuf = new ByteArrayOutputStream();
         for (int i = 0; i < 10; i++) {
-            inBuf.writeBytes(frame(FULL_CHUNK_ID, body(1000, 200 + i)));
+            byte[] f = frame(FULL_CHUNK_ID, body(1000, 200 + i));
+            inBuf.write(f, 0, f.length);
         }
         byte[] in = inBuf.toByteArray();
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         CacheTransformingOutputStream cos =
-            new CacheTransformingOutputStream(encoded, TABLE, BUDGET, Set.of(), ChunkCacheFormat.VERSION_MANIFEST, 0);
-        try (cos) {
+            new CacheTransformingOutputStream(encoded, TABLE, BUDGET, Collections.emptySet(), ChunkCacheFormat.VERSION_MANIFEST, 0);
+        try (CacheTransformingOutputStream ignored = cos) {
             cos.write(in, 0, in.length);
             cos.flush();
         }
         assertEquals(0, cos.bypassedFrames);
         assertEquals(10, cos.fullBlocks);
-        assertArrayEquals(in, decodeWarm(encoded.toByteArray(), BUDGET, Map.of()));
+        assertArrayEquals(in, decodeWarm(encoded.toByteArray(), BUDGET, Collections.emptyMap()));
     }
 
     // ---- helpers ----
@@ -168,7 +173,7 @@ class ChunkCacheWarmTest {
     private static byte[] concat(byte[]... arrays) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] a : arrays) {
-            out.writeBytes(a);
+            out.write(a, 0, a.length);
         }
         return out.toByteArray();
     }

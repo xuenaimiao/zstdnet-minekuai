@@ -68,14 +68,21 @@ final class MiniJson {
             throw new IllegalArgumentException("unexpected end of json");
         }
         char c = src.charAt(pos);
-        return switch (c) {
-            case '{' -> readObject(depth);
-            case '[' -> readArray(depth);
-            case '"' -> readString();
-            case 't', 'f' -> readBoolean();
-            case 'n' -> readNull();
-            default -> readNumber();
-        };
+        switch (c) {
+            case '{':
+                return readObject(depth);
+            case '[':
+                return readArray(depth);
+            case '"':
+                return readString();
+            case 't':
+            case 'f':
+                return readBoolean();
+            case 'n':
+                return readNull();
+            default:
+                return readNumber();
+        }
     }
 
     private Map<String, Object> readObject(int depth) {
@@ -146,22 +153,40 @@ final class MiniJson {
             if (c == '\\') {
                 char esc = next();
                 switch (esc) {
-                    case '"' -> sb.append('"');
-                    case '\\' -> sb.append('\\');
-                    case '/' -> sb.append('/');
-                    case 'b' -> sb.append('\b');
-                    case 'f' -> sb.append('\f');
-                    case 'n' -> sb.append('\n');
-                    case 'r' -> sb.append('\r');
-                    case 't' -> sb.append('\t');
-                    case 'u' -> {
+                    case '"':
+                        sb.append('"');
+                        break;
+                    case '\\':
+                        sb.append('\\');
+                        break;
+                    case '/':
+                        sb.append('/');
+                        break;
+                    case 'b':
+                        sb.append('\b');
+                        break;
+                    case 'f':
+                        sb.append('\f');
+                        break;
+                    case 'n':
+                        sb.append('\n');
+                        break;
+                    case 'r':
+                        sb.append('\r');
+                        break;
+                    case 't':
+                        sb.append('\t');
+                        break;
+                    case 'u': {
                         if (pos + 4 > src.length()) {
                             throw new IllegalArgumentException("bad unicode escape");
                         }
                         sb.append((char) Integer.parseInt(src.substring(pos, pos + 4), 16));
                         pos += 4;
+                        break;
                     }
-                    default -> throw new IllegalArgumentException("bad escape \\" + esc);
+                    default:
+                        throw new IllegalArgumentException("bad escape \\" + esc);
                 }
             } else {
                 sb.append(c);

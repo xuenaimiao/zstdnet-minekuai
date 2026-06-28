@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -69,10 +70,10 @@ class StreamTransformTest {
         // 空流
         assertArrayEquals(new byte[0], untransform(transform(new byte[0], 8), 8, 8));
         // 单个空帧（仅一个长度前缀 0）
-        byte[] oneEmpty = buildFrames(List.of(new byte[0]));
+        byte[] oneEmpty = buildFrames(Arrays.asList(new byte[0]));
         assertArrayEquals(oneEmpty, untransform(transform(oneEmpty, 1), 1, 1));
         // 多个空帧
-        byte[] manyEmpty = buildFrames(List.of(new byte[0], new byte[0], new byte[0]));
+        byte[] manyEmpty = buildFrames(Arrays.asList(new byte[0], new byte[0], new byte[0]));
         assertArrayEquals(manyEmpty, untransform(transform(manyEmpty, 2), 3, 1));
     }
 
@@ -141,8 +142,9 @@ class StreamTransformTest {
     private static byte[] buildFrames(List<byte[]> payloads) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] p : payloads) {
-            out.writeBytes(VarIntCodec.encode(p.length));
-            out.writeBytes(p);
+            byte[] lenPrefix = VarIntCodec.encode(p.length);
+            out.write(lenPrefix, 0, lenPrefix.length);
+            out.write(p, 0, p.length);
         }
         return out.toByteArray();
     }

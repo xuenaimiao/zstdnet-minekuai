@@ -28,8 +28,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 
@@ -62,7 +64,44 @@ public final class VoicePortDetector {
     }
 
     /** 一条被探测到、需要单独通道/桥接的语音端口。{@code label} 仅用于日志诊断。 */
-    public record VoicePort(String label, int port) {
+    public static final class VoicePort {
+        private final String label;
+        private final int port;
+
+        public VoicePort(String label, int port) {
+            this.label = label;
+            this.port = port;
+        }
+
+        public String label() {
+            return this.label;
+        }
+
+        public int port() {
+            return this.port;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof VoicePort)) {
+                return false;
+            }
+            VoicePort other = (VoicePort) o;
+            return this.port == other.port && Objects.equals(this.label, other.label);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(label, port);
+        }
+
+        @Override
+        public String toString() {
+            return "VoicePort[label=" + label + ", port=" + port + "]";
+        }
     }
 
     /**
@@ -76,7 +115,7 @@ public final class VoicePortDetector {
      * @return 有序去重的语音端口列表；探测不到时返回空列表（不会为 null）
      */
     public static List<VoicePort> detect(Path configDir, int backendGamePort, String extraUdpPortsCsv) {
-        return detect(List.of(configDir), backendGamePort, extraUdpPortsCsv);
+        return detect(Collections.singletonList(configDir), backendGamePort, extraUdpPortsCsv);
     }
 
     /**
@@ -133,7 +172,7 @@ public final class VoicePortDetector {
                 continue;
             }
             try {
-                String text = Files.readString(path, StandardCharsets.UTF_8);
+                String text = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
                 return parseSimpleVoiceChatPort(text, path.toString());
             } catch (IOException e) {
                 LOGGER.warn("[zstdnet-server] failed reading Simple Voice Chat config {}: {}", path, e.toString());
@@ -200,7 +239,7 @@ public final class VoicePortDetector {
                     continue;
                 }
                 try {
-                    String text = Files.readString(path, StandardCharsets.UTF_8);
+                    String text = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
                     return parsePlasmoVoicePort(text, backendGamePort, path.toString());
                 } catch (IOException e) {
                     LOGGER.warn("[zstdnet-server] failed reading Plasmo Voice config {}: {}", path, e.toString());
@@ -302,7 +341,7 @@ public final class VoicePortDetector {
 
     static List<Integer> parseExtraPorts(String csv) {
         List<Integer> ports = new ArrayList<>();
-        if (csv == null || csv.isBlank()) {
+        if (csv == null || csv.trim().isEmpty()) {
             return ports;
         }
         for (String token : csv.split("[,\\s]+")) {
@@ -325,7 +364,7 @@ public final class VoicePortDetector {
     // ---------------------------------------------------------------------
 
     private static Integer parsePortValue(String raw) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return null;
         }
         try {

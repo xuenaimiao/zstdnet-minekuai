@@ -14,15 +14,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MojangPremiumVerifierTest {
 
-    private static final String SAMPLE = """
-        {
-          "id": "069a79f444e94726a5befca90e38aaf5",
-          "name": "Notch",
-          "properties": [
-            {"name": "textures", "value": "ewogIC...", "signature": "abc123"}
-          ]
-        }
-        """;
+    private static final String SAMPLE =
+        "{\n"
+        + "  \"id\": \"069a79f444e94726a5befca90e38aaf5\",\n"
+        + "  \"name\": \"Notch\",\n"
+        + "  \"properties\": [\n"
+        + "    {\"name\": \"textures\", \"value\": \"ewogIC...\", \"signature\": \"abc123\"}\n"
+        + "  ]\n"
+        + "}\n";
 
     @Test
     void parsesValidHasJoinedBody() {

@@ -29,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.net.InetAddress;
@@ -37,9 +38,12 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Properties;
 
 public final class DedicatedServerAutoPort {
@@ -147,12 +151,12 @@ public final class DedicatedServerAutoPort {
 
     /** 读取 server.properties 的 online-mode（管理员意图）；缺失/读失败按原版默认 true 处理。 */
     private static boolean readOnlineMode() {
-        Path path = Path.of("server.properties");
+        Path path = Paths.get("server.properties");
         if (!Files.exists(path)) {
             return true;
         }
         Properties props = new Properties();
-        try (var in = Files.newInputStream(path)) {
+        try (InputStream in = Files.newInputStream(path)) {
             props.load(in);
         } catch (IOException e) {
             LOGGER.warn("[zstdnet-server] failed reading {} while checking online-mode: {}", path, e.toString());
@@ -202,7 +206,7 @@ public final class DedicatedServerAutoPort {
         boolean exists = Files.exists(path);
 
         if (exists) {
-            try (var in = Files.newInputStream(path)) {
+            try (InputStream in = Files.newInputStream(path)) {
                 props.load(in);
             } catch (IOException e) {
                 LOGGER.warn("[zstdnet-server] failed reading {} for auto takeover: {}", path, e.toString());
@@ -217,18 +221,18 @@ public final class DedicatedServerAutoPort {
     }
 
     private static boolean parseBoolean(String raw, boolean fallback) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return fallback;
         }
         return Boolean.parseBoolean(raw.trim());
     }
 
     private static String parseHost(String raw, String fallback) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return fallback;
         }
         String host = ServerProxyConfigFile.parseHost(raw, fallback);
-        return host == null || host.isBlank() ? fallback : host;
+        return host == null || host.trim().isEmpty() ? fallback : host;
     }
 
     private static int normalizePort(int port, int fallback) {
@@ -236,7 +240,7 @@ public final class DedicatedServerAutoPort {
     }
 
     private static int chooseBackendPort(int publicPort, String bindHost, int configuredTargetPort) {
-        String hostToProbe = bindHost == null || bindHost.isBlank() ? DEFAULT_LISTEN_HOST : bindHost.trim();
+        String hostToProbe = bindHost == null || bindHost.trim().isEmpty() ? DEFAULT_LISTEN_HOST : bindHost.trim();
         if (configuredTargetPort >= MIN_PORT
             && configuredTargetPort <= MAX_PORT
             && configuredTargetPort != publicPort
@@ -263,7 +267,7 @@ public final class DedicatedServerAutoPort {
         try (ServerSocket socket = new ServerSocket()) {
             socket.setReuseAddress(false);
             InetSocketAddress address;
-            if (host == null || host.isBlank() || "0.0.0.0".equals(host)) {
+            if (host == null || host.trim().isEmpty() || "0.0.0.0".equals(host)) {
                 address = new InetSocketAddress(port);
             } else {
                 address = new InetSocketAddress(InetAddress.getByName(host), port);
@@ -312,8 +316,8 @@ public final class DedicatedServerAutoPort {
                 }
                 field.setAccessible(true);
                 Object value = field.get(settings);
-                if (value instanceof Properties props) {
-                    return props;
+                if (value instanceof Properties) {
+                    return (Properties) value;
                 }
             }
         }
@@ -370,14 +374,14 @@ public final class DedicatedServerAutoPort {
     }
 
     private static void persistCompressionThreshold(int publicPort, boolean forceCompressionThreshold) {
-        Path path = Path.of("server.properties");
+        Path path = Paths.get("server.properties");
         if (!Files.exists(path)) {
             return;
         }
         try {
-            String text = Files.readString(path, StandardCharsets.UTF_8);
+            String text = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
             String lineSeparator = text.contains("\r\n") ? "\r\n" : "\n";
-            List<String> lines = new ArrayList<>(List.of(text.split("\\R", -1)));
+            List<String> lines = new ArrayList<>(Arrays.asList(text.split("\\R", -1)));
             boolean hasServerPort = false;
             boolean hasCompression = false;
 
@@ -404,7 +408,7 @@ public final class DedicatedServerAutoPort {
                 lines.add("network-compression-threshold=" + ZSTD_COMPRESSION_THRESHOLD);
             }
 
-            Files.writeString(path, String.join(lineSeparator, lines), StandardCharsets.UTF_8);
+            Files.write(path, String.join(lineSeparator, lines).getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
             LOGGER.warn("[zstdnet-server] failed persisting server.properties compression threshold: {}", e.toString());
         }
@@ -418,11 +422,59 @@ public final class DedicatedServerAutoPort {
         LOGGER.info("[zstdnet-server] keeping dedicated network-compression-threshold unchanged because online-mode=true and premium_verification=off.");
     }
 
-    private record AutoPortConfig(
-        boolean enabled,
-        boolean autoTakeover,
-        String listenHost,
-        int configuredTargetPort
-    ) {
+    private static final class AutoPortConfig {
+        private final boolean enabled;
+        private final boolean autoTakeover;
+        private final String listenHost;
+        private final int configuredTargetPort;
+
+        AutoPortConfig(boolean enabled, boolean autoTakeover, String listenHost, int configuredTargetPort) {
+            this.enabled = enabled;
+            this.autoTakeover = autoTakeover;
+            this.listenHost = listenHost;
+            this.configuredTargetPort = configuredTargetPort;
+        }
+
+        public boolean enabled() {
+            return this.enabled;
+        }
+
+        public boolean autoTakeover() {
+            return this.autoTakeover;
+        }
+
+        public String listenHost() {
+            return this.listenHost;
+        }
+
+        public int configuredTargetPort() {
+            return this.configuredTargetPort;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof AutoPortConfig)) {
+                return false;
+            }
+            AutoPortConfig other = (AutoPortConfig) o;
+            return this.enabled == other.enabled
+                && this.autoTakeover == other.autoTakeover
+                && this.configuredTargetPort == other.configuredTargetPort
+                && Objects.equals(this.listenHost, other.listenHost);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(enabled, autoTakeover, listenHost, configuredTargetPort);
+        }
+
+        @Override
+        public String toString() {
+            return "AutoPortConfig[enabled=" + enabled + ", autoTakeover=" + autoTakeover
+                + ", listenHost=" + listenHost + ", configuredTargetPort=" + configuredTargetPort + "]";
+        }
     }
 }

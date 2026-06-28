@@ -2,8 +2,6 @@ package cn.tohsaka.factory.zstdnet.auth;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.HexFormat;
-
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -12,16 +10,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PremiumAuthProtocolTest {
 
+    private static byte[] hexToBytes(String hex) {
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
+    }
+
     @Test
     void challengeRoundTrips() {
-        byte[] nonce = HexFormat.of().parseHex("00112233445566778899aabbccddeeff");
+        byte[] nonce = hexToBytes("00112233445566778899aabbccddeeff");
         byte[] payload = PremiumAuthProtocol.encodeChallenge(nonce);
         assertArrayEquals(nonce, PremiumAuthProtocol.decodeChallenge(payload));
     }
 
     @Test
     void serverIdDerivationIsDeterministicAndHex() {
-        byte[] nonce = HexFormat.of().parseHex("0102030405060708090a0b0c0d0e0f10");
+        byte[] nonce = hexToBytes("0102030405060708090a0b0c0d0e0f10");
         String a = PremiumAuthProtocol.serverIdFromNonce(nonce);
         String b = PremiumAuthProtocol.serverIdFromNonce(nonce.clone());
         assertEquals(a, b);
@@ -60,7 +66,7 @@ class PremiumAuthProtocolTest {
 
     @Test
     void channelPathServerIdRoundTrips() {
-        byte[] nonce = HexFormat.of().parseHex("00112233445566778899aabbccddeeff");
+        byte[] nonce = hexToBytes("00112233445566778899aabbccddeeff");
         String serverId = PremiumAuthProtocol.serverIdFromNonce(nonce);
         String path = PremiumAuthProtocol.channelPathWithServerId(serverId);
         assertEquals("auth/00112233445566778899aabbccddeeff", path);

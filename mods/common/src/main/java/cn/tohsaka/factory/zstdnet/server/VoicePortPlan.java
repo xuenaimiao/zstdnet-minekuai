@@ -19,7 +19,10 @@
 
 package cn.tohsaka.factory.zstdnet.server;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 一次语音端口计划：传输方式 + 探测到的需要单独处理的语音端口（有序，下标即隧道 channelId）。
@@ -29,14 +32,27 @@ import java.util.List;
  *
  * <p>独立顶层 public 类（而非内嵌于包级私有的 {@code ServerProxyRuntime}），以便 {@code network} 包引用。</p>
  */
-public record VoicePortPlan(String transport, List<Integer> ports) {
-    public VoicePortPlan {
+public final class VoicePortPlan {
+    private final String transport;
+    private final List<Integer> ports;
+
+    public VoicePortPlan(String transport, List<Integer> ports) {
         transport = transport == null ? "off" : transport;
-        ports = ports == null ? List.of() : List.copyOf(ports);
+        ports = ports == null ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(ports));
+        this.transport = transport;
+        this.ports = ports;
+    }
+
+    public String transport() {
+        return this.transport;
+    }
+
+    public List<Integer> ports() {
+        return this.ports;
     }
 
     public static VoicePortPlan empty() {
-        return new VoicePortPlan("off", List.of());
+        return new VoicePortPlan("off", Collections.emptyList());
     }
 
     /** tunnel 模式且确有语音端口：game forwarder 需要按 channelId 多路复用入口端口。 */
@@ -47,5 +63,28 @@ public record VoicePortPlan(String transport, List<Integer> ports) {
     /** bridge 模式且确有语音端口：客户端直连真实服务器同端口，服务端不额外中转。 */
     public boolean isBridge() {
         return "bridge".equals(transport) && !ports.isEmpty();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof VoicePortPlan)) {
+            return false;
+        }
+        VoicePortPlan other = (VoicePortPlan) o;
+        return Objects.equals(this.transport, other.transport)
+            && Objects.equals(this.ports, other.ports);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(transport, ports);
+    }
+
+    @Override
+    public String toString() {
+        return "VoicePortPlan[transport=" + transport + ", ports=" + ports + "]";
     }
 }

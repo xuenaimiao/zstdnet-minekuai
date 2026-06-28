@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 /**
  * ZSTD 训练字典在磁盘上的标准布局与读取。
@@ -46,7 +47,7 @@ public final class DictionaryFiles {
 
     /** 把配置里的字典名解析成实际路径：绝对路径原样使用，否则相对 {@link #dictDir(Path)}。 */
     public static Path resolve(Path configDir, String nameOrPath) {
-        Path candidate = Path.of(nameOrPath.trim());
+        Path candidate = Paths.get(nameOrPath.trim());
         return candidate.isAbsolute() ? candidate : dictDir(configDir).resolve(nameOrPath.trim());
     }
 
@@ -57,7 +58,7 @@ public final class DictionaryFiles {
      * @throws IOException 文件不存在或读取失败时抛出，交由调用方决定如何回退（通常记日志后按无字典处理）
      */
     public static byte[] load(Path configDir, String nameOrPath) throws IOException {
-        if (nameOrPath == null || nameOrPath.isBlank()) {
+        if (nameOrPath == null || nameOrPath.trim().isEmpty()) {
             return null;
         }
         Path file = resolve(configDir, nameOrPath);
