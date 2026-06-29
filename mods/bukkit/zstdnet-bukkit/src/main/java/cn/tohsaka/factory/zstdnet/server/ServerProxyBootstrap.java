@@ -140,10 +140,34 @@ public final class ServerProxyBootstrap {
         if (RUNTIME.isRunning() && s != null) {
             logger.info("[zstdnet] proxy " + action + ": listen " + s.listenHost() + ":" + s.listenPort()
                 + " -> backend 127.0.0.1:" + backendPort + " (ZstdNet powered by minekuai.com).");
+            // 额外打印一段「两端口说明」横幅：明确告诉服主哪个是给普通玩家的正常端口、哪个是给装了
+            // ZstdNet 客户端 mod 的玩家的压缩代理端口（双语，避免控制台中文乱码时也能读懂端口信息）。
+            logPortBanner(s);
         } else {
             logger.warning("[zstdnet] proxy did not start. Check listen/target in " + ServerProxyConfigFile.path()
                 + " (the listen port must differ from the Minecraft server-port and be free).");
         }
+    }
+
+    /**
+     * 服务器启动（及配置热重载）后额外打印的端口说明横幅。
+     * <p>「正常端口」= MC 后端 server-port，未装 mod 的原版玩家直连；
+     * 「代理端口」= 本插件的 zstd 监听端口，装了 ZstdNet 客户端 mod 的玩家连这个即可获得压缩。
+     * 两类玩家进入同一个后端、同一个世界，可正常一起游玩。
+     */
+    private static void logPortBanner(ServerProxyRuntime.HudSnapshot s) {
+        logger.info("[zstdnet] ==================== ZstdNet ====================");
+        logger.info("[zstdnet] 压缩代理已就绪 / compression proxy ready:");
+        logger.info("[zstdnet]   正常端口 Normal port : " + backendPort
+            + "   <- 未装 mod 的玩家直接连这个 (vanilla players, no mod)");
+        logger.info("[zstdnet]   代理端口 Proxy  port : " + s.listenPort()
+            + "   <- 装了 ZstdNet 客户端 mod 的玩家连这个 (mod clients; bind " + s.listenHost() + ")");
+        logger.info("[zstdnet] 两类玩家进入同一个后端、同一个世界，可正常一起游玩。"
+            + " (both kinds of players share the same world)");
+        logger.info("[zstdnet] 提示: 要让 mod 玩家真正压缩省流量，后端需 online-mode=false"
+            + " (插件端不做正版验证 / plugin cannot verify premium accounts)。");
+        logger.info("[zstdnet] powered by minekuai.com");
+        logger.info("[zstdnet] =================================================");
     }
 
     /**
