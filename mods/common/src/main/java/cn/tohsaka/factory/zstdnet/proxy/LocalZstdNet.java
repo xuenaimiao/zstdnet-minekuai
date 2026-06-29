@@ -43,6 +43,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.EOFException;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -100,19 +101,57 @@ public final class LocalZstdNet {
     private static volatile boolean clientCachePersist = true;
     private static volatile long clientCachePersistBytes = ChunkCacheFormat.DEFAULT_PERSIST_BYTES;
 
-    // 登录态友好断开提示：客户端装了 ZstdNet 而对端没有（或后端不可达）时，原版只会显示无原因的「连接中断」。
-    // 本地代理在登录阶段探测到对端不会说 ZSTD（首帧解压失败 / 直接 EOF）或后端拨号失败时，主动合成一个登录断开包，
-    // 让玩家在原版断开界面看到明确原因，而不是一脸懵的「连接中断」。
+    // 登录态友好断开提示：客户端装了 ZstdNet 而连接在登录阶段失败时，原版只会显示无原因的「连接中断」。
+    // 本地代理据此主动合成一个登录断开包，让玩家在原版断开界面看到明确原因，而不是一脸懵的「连接中断」。
+    //
+    // 关键：登录阶段“一个有效解压字节都没产出”有多种本质不同的成因，绝不能一律归因为「没装 zstd」（否则服务器
+    // 异常崩溃 / 重启 / FRP 背后后端已死时会被误报为「未安装 zstd」）。按对端实际回了什么字节来判别失败模式，
+    // 见 classifyNoProduce：
+    //   - 对端一字节都没回（崩溃 / 重启 / 原版服把魔数当垃圾后静默断）→ 中性 NO_RESPONSE（两种可能并列）；
+    //   - 对端回了像 zstd 帧的字节却解不出（后端握手中途崩了）→ SERVER_DROPPED（可能崩溃/重启）；
+    //   - 对端回了 >=4 个明显非 zstd 的字节（确有证据对端不会说 ZSTD）→ 确指 NO_BACKEND（真没装）。
     private static final String DISCONNECT_NO_BACKEND =
         "ZstdNet：无法与服务器建立压缩连接。\n\n"
         + "已连接到服务器，但对方没有运行 ZstdNet 服务端（或服务端未启用 / 版本不匹配 / 连接被拒绝）。\n"
         + "请联系服主在服务器安装并启用 ZstdNet 服务端；\n"
         + "若该服务器本就没有 ZstdNet，可在客户端配置 zstdnet-client.toml 中关闭后再连接。\n\n"
         + "This server has no ZstdNet backend. Ask the admin to install it, or disable ZstdNet on the client.";
+    // 对端一字节都没回：成因模糊——可能服务器没装/没启用 ZstdNet，也可能服务器正在重启或已崩溃。两种可能并列，绝不确指。
+    private static final String DISCONNECT_NO_RESPONSE =
+        "ZstdNet：服务器无响应。\n\n"
+        + "已连上服务器，但对方没有返回任何数据。可能服务器未安装 / 未启用 ZstdNet 服务端，\n"
+        + "也可能服务器正在重启或已崩溃。请稍后重试；\n"
+        + "若确认该服务器本就没有 ZstdNet，可在客户端配置 zstdnet-client.toml 中关闭后再连接。\n\n"
+        + "No response from the server: it may not run ZstdNet, or it may be restarting / crashed. "
+        + "Retry later, or disable ZstdNet in zstdnet-client.toml if this server has no ZstdNet.";
+    // 对端回了像 zstd 帧的字节却没能解出有效内容：典型是后端在登录握手期间崩溃/断开，发了半个帧就没了。
+    private static final String DISCONNECT_SERVER_DROPPED =
+        "ZstdNet：与服务器的连接在握手期间意外中断。\n\n"
+        + "服务器可能正在重启或已崩溃，请稍后重试。\n\n"
+        + "The connection dropped during handshake; the server may be restarting or has crashed. Please retry later.";
     private static final String DISCONNECT_UNREACHABLE =
         "ZstdNet：无法连接到服务器。\n\n"
         + "服务器可能已离线，或地址 / 端口填写有误。\n\n"
         + "ZstdNet could not reach the server (it may be offline, or the address/port is wrong).";
+
+    /**
+     * 「整条下行无有效产出」时的失败模式判别结果。把分类与具体文案解耦，便于单测断言意图而非措辞。
+     * 见 {@link #classifyNoProduce} / {@link #messageForNoProduce}。
+     */
+    enum NoProduceReason {
+        /** 对端一字节都没回：成因模糊（没装 / 重启 / 崩溃），中性提示、两种可能并列。 */
+        NO_RESPONSE,
+        /** 对端回了真 zstd 帧字节却解不出有效内容：后端多半在登录握手期间崩了 / 断了。 */
+        SERVER_DROPPED,
+        /** 对端回了 >=4 个明显非 zstd 的字节：确有证据对端不会说 ZSTD（真没装 / 没启用）。 */
+        NO_BACKEND
+    }
+
+    // 登录期下行读超时：对端接受了 TCP 却迟迟不回任何有效数据（服务器卡死 / 冻结 / 死循环 / 后端崩在握手中），
+    // 不能让客户端永远卡在「正在连接…」。超时后抛 SocketTimeoutException → 落到 classifyNoProduce 给中性原因。
+    // 一旦收到首个有效下行字节（握手已正常推进）即清零该超时——play 阶段下行可合法长时间空闲，留着会误断。
+    // 取值低于原版客户端 30s 读超时，以便我方更友好的提示先于原版「连接超时」出现。
+    private static final int LOGIN_RESPONSE_TIMEOUT_MS = 15_000;
 
     public enum Mode {
         AUTO,
@@ -506,7 +545,8 @@ public final class LocalZstdNet {
                 return;
             }
             upstream.setTcpNoDelay(true);
-            upstream.setSoTimeout(0);
+            // 登录期给读超时（卡死的服务器不会回数据也不会断 TCP）；收到首个有效下行字节后会清零（见下方下行 worker）。
+            upstream.setSoTimeout(LOGIN_RESPONSE_TIMEOUT_MS);
             LOGGER.info(
                 "zstdnet: ZSTD upstream connected local {} -> remote {}",
                 upstream.getLocalSocketAddress(),
@@ -551,13 +591,16 @@ public final class LocalZstdNet {
             });
 
             // 探测对端是否真的会说 ZSTD：登录阶段若一个有效解压字节都没收到（首帧非 zstd 帧 / 直接 EOF），
-            // 几乎可断定对端没有 ZstdNet 服务端。此时合成一个登录断开包给客户端（见下方 finally），替代无原因的「连接中断」。
-            // 一旦透传过任意有效字节就锁死该标记：之后即便对端发来的是正常的服务端断开，也原样透传、绝不再覆盖。
+            // 说明握手没正常完成。但成因有多种（对端没装 ZstdNet / 后端崩溃重启 / FRP 背后后端已死），绝不能一律
+            // 报「未安装 zstd」——否则服务器异常崩溃时会被误判。下面用 MagicSniffingInputStream 旁路记录对端实际回了
+            // 什么字节，在 finally 里按失败模式选措辞（见 classifyNoProduce）。
+            // 一旦透传过任意有效字节就锁死 producedAny：之后即便对端发来的是正常的服务端断开，也原样透传、绝不再覆盖。
             final AtomicBoolean producedAny = new AtomicBoolean(false);
+            final MagicSniffingInputStream sniffer = new MagicSniffingInputStream(upstream.getInputStream());
             Future<?> downstreamWriter = WORKERS.submit(() -> {
                 OutputStream clientOut = null;
                 try (InputStream zstdIn = ZstdStreams.newDecompressor(
-                    new CountingInputStream(upstream.getInputStream(), stats::addServerToClientZstd),
+                    new CountingInputStream(sniffer, stats::addServerToClientZstd),
                     options,
                     clientDict
                 )) {
@@ -576,7 +619,13 @@ public final class LocalZstdNet {
                     int n;
                     while ((n = downstream.read(buf)) >= 0) {
                         if (n > 0) {
-                            producedAny.set(true);
+                            if (producedAny.compareAndSet(false, true)) {
+                                // 首个有效下行字节=握手已正常推进：撤掉登录期读超时，进入 play 阶段（play 下行可合法长时间空闲）。
+                                try {
+                                    upstream.setSoTimeout(0);
+                                } catch (SocketException ignored) {
+                                }
+                            }
                             clientOut.write(buf, 0, n);
                             clientOut.flush();
                         }
@@ -584,8 +633,11 @@ public final class LocalZstdNet {
                 } catch (Exception ignored) {
                 } finally {
                     if (clientOut != null && !producedAny.get()) {
-                        // 整条下行从未产出有效字节 -> 对端不会说 ZSTD（或刚连上就被拒）。给客户端一个明确原因。
-                        LoginDisconnect.trySend(clientOut, DISCONNECT_NO_BACKEND);
+                        // 整条下行从未产出有效字节。按对端实际回了什么字节判别成因，给客户端一个不误导的原因。
+                        // （sniffer 与 finally 在同一下行 worker 线程读写，无需跨线程同步。）
+                        NoProduceReason reason =
+                            classifyNoProduce(sniffer.rawSeen(), sniffer.firstBytes(), sniffer.firstLen());
+                        LoginDisconnect.trySend(clientOut, messageForNoProduce(reason));
                     }
                     try {
                         client.shutdownOutput();
@@ -596,6 +648,97 @@ public final class LocalZstdNet {
 
             upstreamWriter.get();
             downstreamWriter.get();
+        }
+    }
+
+    /**
+     * 在「整条下行无有效产出」时，按对端（服务端）实际回了哪些原始字节判别失败模式。纯函数，便于单测。
+     *
+     * @param rawSeen  从对端 socket 读到的原始字节总数（解压前）
+     * @param first    首 &le;4 个原始字节
+     * @param firstLen first 中实际有效的字节数
+     */
+    static NoProduceReason classifyNoProduce(long rawSeen, byte[] first, int firstLen) {
+        if (rawSeen <= 0 || firstLen <= 0) {
+            // 对端一字节都没回：可能没装 / 没启用，也可能正在重启 / 崩溃 / 卡死。模糊 → 中性。
+            return NoProduceReason.NO_RESPONSE;
+        }
+        if (firstLen < 4) {
+            // 只回了 1~3 字节就断：太少，无法确证是不是 zstd 帧。保守归中性，避免把崩溃误说成「没装」。
+            return NoProduceReason.NO_RESPONSE;
+        }
+        if (ZstdStreams.startsWithFrameMagic(first, firstLen)) {
+            // 回了真 zstd 帧的开头却没解出有效内容：后端多半在握手期间崩了 / 断了。
+            return NoProduceReason.SERVER_DROPPED;
+        }
+        // 回了 >=4 个明显非 zstd 的字节：确有证据对端不会说 ZSTD。
+        return NoProduceReason.NO_BACKEND;
+    }
+
+    /** 把失败模式映射到给客户端的断开文案。 */
+    private static String messageForNoProduce(NoProduceReason reason) {
+        switch (reason) {
+            case SERVER_DROPPED:
+                return DISCONNECT_SERVER_DROPPED;
+            case NO_BACKEND:
+                return DISCONNECT_NO_BACKEND;
+            case NO_RESPONSE:
+            default:
+                return DISCONNECT_NO_RESPONSE;
+        }
+    }
+
+    /**
+     * 旁路嗅探流：被动记录从对端读到的原始字节总数与首 4 字节，用于在「整条下行无有效产出」时判别失败模式。
+     * 透传不改变任何字节、无超时、无阻塞 peek。由下行 worker 单线程读写，故字段无需 volatile。
+     */
+    static final class MagicSniffingInputStream extends FilterInputStream {
+        private long rawSeen;
+        private final byte[] firstBytes = new byte[4];
+        private int firstLen;
+
+        MagicSniffingInputStream(InputStream in) {
+            super(Objects.requireNonNull(in));
+        }
+
+        private void capture(byte[] b, int off, int len) {
+            rawSeen += len;
+            for (int i = 0; i < len && firstLen < firstBytes.length; i++) {
+                firstBytes[firstLen++] = b[off + i];
+            }
+        }
+
+        @Override
+        public int read() throws IOException {
+            int v = in.read();
+            if (v >= 0) {
+                rawSeen++;
+                if (firstLen < firstBytes.length) {
+                    firstBytes[firstLen++] = (byte) v;
+                }
+            }
+            return v;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int n = in.read(b, off, len);
+            if (n > 0) {
+                capture(b, off, n);
+            }
+            return n;
+        }
+
+        long rawSeen() {
+            return rawSeen;
+        }
+
+        byte[] firstBytes() {
+            return firstBytes;
+        }
+
+        int firstLen() {
+            return firstLen;
         }
     }
 

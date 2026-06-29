@@ -37,7 +37,26 @@ public final class ZstdStreams {
      */
     public static final int FRAME_DICT_ID_PEEK = 18;
 
+    /** ZSTD 标准帧魔数在 wire（小端）下的前 4 字节：0x28 0xB5 0x2F 0xFD。 */
+    private static final byte[] FRAME_MAGIC = {(byte) 0x28, (byte) 0xB5, (byte) 0x2F, (byte) 0xFD};
+
     private ZstdStreams() {
+    }
+
+    /**
+     * 判断 {@code buf} 的前 {@code len} 字节是否以 ZSTD 标准帧魔数开头（需至少 4 个字节才可能为 true）。
+     * <p>用于在「整条下行无有效产出」时区分「对端发了真 zstd 帧（后端崩在握手中）」与「对端根本不说 ZSTD」。
+     */
+    public static boolean startsWithFrameMagic(byte[] buf, int len) {
+        if (buf == null || len < FRAME_MAGIC.length) {
+            return false;
+        }
+        for (int i = 0; i < FRAME_MAGIC.length; i++) {
+            if (buf[i] != FRAME_MAGIC[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

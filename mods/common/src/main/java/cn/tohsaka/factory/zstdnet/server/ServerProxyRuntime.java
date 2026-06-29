@@ -111,6 +111,15 @@ import java.util.stream.Collectors;
 final class ServerProxyRuntime {
     static final String ZSTD_ADDRESS_HINT = "当前服务器启用了 ZSTD 连接，请联系服务器管理员获取正确的连接地址。";
 
+    // 后端 MC 服务器不可达 / 崩溃 / 重启时给登录态 ZSTD 客户端的真实原因。代理在线但后端没了——客户端那边只能笼统判为
+    // 「无响应」，由我方（代理）补发明确原因。注意：客户端下行走 zstd 解压，故必须压缩后再写（见 sendCompressedLoginDisconnect）。
+    private static final String BACKEND_UNAVAILABLE_MSG =
+        "ZstdNet：后端 Minecraft 服务器暂时不可用。\n\n"
+        + "ZstdNet 代理在线，但后端游戏服务器没有响应——可能正在重启，或刚刚崩溃。\n"
+        + "请稍后重试。\n\n"
+        + "The backend Minecraft server is temporarily unavailable "
+        + "(it may be restarting or has just crashed). Please try again later.";
+
     private static final Logger LOGGER = LoggerFactory.getLogger(ServerProxyRuntime.class);
     private static final byte[] PROXY_V2_SIGNATURE = new byte[]{
         0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a
@@ -471,6 +480,11 @@ final class ServerProxyRuntime {
                     upstream.connect(cfg.target.toAddress(), 5000);
                 } catch (IOException dialErr) {
                     LOGGER.warn("[server] Remote {} Connect Error: {}", clientSocket.getRemoteSocketAddress(), dialErr.getMessage());
+                    // 代理在线但后端 MC 拨号失败（崩溃 / 关停 / 重启中）：给登录态 ZSTD 客户端补发真实原因，
+                    // 避免客户端只能笼统判为「无响应」。此时字典尚未协商，用无字典帧压缩。状态 ping（RAW_STATUS）不懂登录断开包，不发。
+                    if (clientMode.mode == ClientMode.ZSTD) {
+                        sendCompressedLoginDisconnect(clientSocket, cfg, false, BACKEND_UNAVAILABLE_MSG);
+                    }
                     return;
                 }
 
@@ -559,6 +573,10 @@ final class ServerProxyRuntime {
                     if (isRealPipeErr(handshakeErr)) {
                         LOGGER.warn("[server] handshake read error source={}: {}", guardIp, handshakeErr.toString());
                     }
+                    // 握手期间就断了（多半是后端崩溃 / 重启，发完握手前就掉线）：给登录态客户端补发压缩的真实原因。
+                    // 到这里 clientMode 必为 ZSTD（RAW_STATUS/RAW_LOGIN 已在前面分流），字典也已协商，按 downstreamDict 压缩。
+                    // 若实为客户端自身发了垃圾/已掉线，写失败会被静默吞掉，无副作用。s2c 泵尚未启动，可安全直写客户端。
+                    sendCompressedLoginDisconnect(clientSocket, cfg, downstreamDict, BACKEND_UNAVAILABLE_MSG);
                     return;
                 }
 
@@ -1284,6 +1302,29 @@ final class ServerProxyRuntime {
             }
         } catch (IOException e) {
             LOGGER.debug("[server] failed to send raw-login disconnect packet: {}", e.toString());
+        }
+    }
+
+    /**
+     * 给仍处登录态的 <b>ZSTD</b> 客户端补发一条「压缩的」登录断开包，让玩家看到真实原因（如后端崩溃 / 不可用）。
+     * <p>与明文版 {@link #sendLoginDisconnect} 的区别：ZSTD 客户端的下行整条走 zstd 解压，明文写过去会被当作非法帧
+     * 解不出 → 客户端只能笼统判为「无响应」。故此处必须把断开包压成一个 zstd 帧再写。仅在确为 ZSTD 客户端时调用。
+     *
+     * @param useDictionary 是否按协商出的字典压缩（拨号阶段尚未协商时传 false）。
+     */
+    private void sendCompressedLoginDisconnect(Socket clientSocket, ProxyConfig cfg, boolean useDictionary, String message) {
+        if (clientSocket == null || cfg == null || message == null || message.trim().isEmpty()) {
+            return;
+        }
+        try {
+            // 关闭 zstdOut 会写出帧尾并释放原生压缩上下文、同时关闭底层 socket 输出——本就要断开，正合适。
+            try (OutputStream zstdOut = ZstdStreams.newCompressor(
+                clientSocket.getOutputStream(), cfg.level, cfg.compression, useDictionary)) {
+                zstdOut.write(LoginDisconnect.buildPacket(message));
+                zstdOut.flush();
+            }
+        } catch (Exception e) {
+            LOGGER.debug("[server] failed to send compressed login disconnect: {}", e.toString());
         }
     }
 
