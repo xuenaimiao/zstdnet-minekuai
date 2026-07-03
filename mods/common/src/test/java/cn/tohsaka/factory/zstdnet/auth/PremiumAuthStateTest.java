@@ -2,6 +2,11 @@ package cn.tohsaka.factory.zstdnet.auth;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,5 +43,41 @@ class PremiumAuthStateTest {
         assertFalse(PremiumAuthState.resolveStrict("lenient"));
         assertFalse(PremiumAuthState.resolveStrict(null));
         assertFalse(PremiumAuthState.resolveStrict(""));
+    }
+
+    @Test
+    void blankConfigWithoutInjectorFallsBackToMojang() {
+        assertEquals(
+            Collections.singletonList(MojangPremiumVerifier.MOJANG_SESSION_BASE),
+            PremiumAuthState.parseSessionBases("", null));
+        assertEquals(
+            Collections.singletonList(MojangPremiumVerifier.MOJANG_SESSION_BASE),
+            PremiumAuthState.parseSessionBases(null, null));
+    }
+
+    @Test
+    void blankConfigWithDetectedInjectorPrefersSkinStation() {
+        List<String> bases = PremiumAuthState.parseSessionBases("", "https://littleskin.cn/api/yggdrasil/");
+        assertEquals(Arrays.asList(
+            "https://littleskin.cn/api/yggdrasil",
+            MojangPremiumVerifier.MOJANG_SESSION_BASE), bases);
+    }
+
+    @Test
+    void explicitListIsRespectedVerbatimAndDeduplicated() {
+        // 显式配置时完全按管理员填写的列表来，不追加自动探测结果。
+        List<String> bases = PremiumAuthState.parseSessionBases(
+            "https://skin.example.com/api/yggdrasil/, mojang,MOJANG ; https://skin.example.com/api/yggdrasil",
+            "https://other.example.com/api/yggdrasil");
+        assertEquals(Arrays.asList(
+            "https://skin.example.com/api/yggdrasil",
+            MojangPremiumVerifier.MOJANG_SESSION_BASE), bases);
+    }
+
+    @Test
+    void emptyEntriesTreatedAsMojang() {
+        assertEquals(
+            Collections.singletonList(MojangPremiumVerifier.MOJANG_SESSION_BASE),
+            PremiumAuthState.parseSessionBases(" , ; ", null));
     }
 }

@@ -84,7 +84,8 @@ public final class ServerProxyConfigFile {
         "premium_verification",
         "premium_verification_mode",
         "premium_session_server",
-        "premium_pass_real_ip"
+        "premium_pass_real_ip",
+        "premium_uuid_guard"
     )));
     private static final String DEFAULT_PREMIUM_VERIFICATION = "auto";
     private static final String DEFAULT_PREMIUM_VERIFICATION_MODE = "lenient";
@@ -178,6 +179,11 @@ public final class ServerProxyConfigFile {
     /** 核验时是否附带玩家真实 IP。 */
     public static boolean readPremiumPassRealIp() {
         return Boolean.parseBoolean(loadProperties().getProperty("premium_pass_real_ip", "false").trim());
+    }
+
+    /** 正版身份保护：曾正版进服的玩家名验证失败时拒绝而非静默降级离线（默认开启）。 */
+    public static boolean readPremiumUuidGuard() {
+        return Boolean.parseBoolean(loadProperties().getProperty("premium_uuid_guard", "true").trim());
     }
 
     public static void writeListenPort(int port) throws IOException {
@@ -338,6 +344,7 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("premium_verification_mode", DEFAULT_PREMIUM_VERIFICATION_MODE);
         props.putIfAbsent("premium_session_server", "");
         props.putIfAbsent("premium_pass_real_ip", "false");
+        props.putIfAbsent("premium_uuid_guard", "true");
         return props;
     }
 
@@ -437,11 +444,25 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "# 验证不通过（盗版客户端 / 没装 zstdnet / 客户端离线会话）时的处理：", lineSeparator);
         appendLine(builder, "#   lenient（默认·宽松）：正版玩家拿真实 UUID/皮肤，其余回落到离线 UUID 照常进服。", lineSeparator);
         appendLine(builder, "#   strict（严格·纯正版）：验证不通过一律拒绝，等价真正版服。", lineSeparator);
+        appendLine(builder, "# lenient 下「曾正版进服的玩家」不会被静默降级——见下方 premium_uuid_guard（默认开启）。", lineSeparator);
         appendLine(builder, "premium_verification_mode=" + props.getProperty("premium_verification_mode"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
-        appendLine(builder, "# 会话服务基址。留空=Mojang 官方。换成 authlib-injector / 自建 Yggdrasil 的 sessionserver 基址即可对接外置登录。", lineSeparator);
+        appendLine(builder, "# 会话服务基址（支持逗号分隔多个，按序核验、命中即通过；serverId 为一次性 nonce，多问几家不会误判）。", lineSeparator);
+        appendLine(builder, "# 留空=自动：Mojang 官方；若检测到服务端以 authlib-injector（-javaagent）启动，会自动把该皮肤站", lineSeparator);
+        appendLine(builder, "#   一并纳入核验（皮肤站优先），LittleSkin / LinkSkin 等外置登录零配置即可用。", lineSeparator);
+        appendLine(builder, "# 显式配置时完全按填写的列表来。条目可写：mojang（=官方）、皮肤站 API 根地址", lineSeparator);
+        appendLine(builder, "#   （如 https://littleskin.cn/api/yggdrasil，缺 /sessionserver 路径会自动补）或完整 sessionserver 基址。", lineSeparator);
+        appendLine(builder, "#   例：premium_session_server=https://littleskin.cn/api/yggdrasil,mojang", lineSeparator);
         appendLine(builder, "premium_session_server=" + props.getProperty("premium_session_server"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 正版身份保护（防背包/数据「丢失」）。默认 true。", lineSeparator);
+        appendLine(builder, "# 开启后：凡曾以正版身份进入本服的玩家名，若本次正版会话校验未通过（启动器会话过期、盗版冒名等），", lineSeparator);
+        appendLine(builder, "#   将被拒绝并明确提示「请重新登录启动器」，而不是按 lenient 静默回落离线 UUID——离线 UUID 加载不到", lineSeparator);
+        appendLine(builder, "#   原先绑定正版 UUID 的存档，玩家侧表现为背包/进度被清空。", lineSeparator);
+        appendLine(builder, "# 已验证名单自动维护于本文件同目录的 zstdnet-premium-players.properties，删除条目即解除对应玩家的保护。", lineSeparator);
+        appendLine(builder, "premium_uuid_guard=" + props.getProperty("premium_uuid_guard"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# 核验时是否把玩家真实 IP 一并交给会话服（类似 prevent-proxy-connections）。默认 false。", lineSeparator);

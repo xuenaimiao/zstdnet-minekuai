@@ -173,10 +173,11 @@ public final class DedicatedServerAutoPort {
                 true,
                 strict,
                 ServerProxyConfigFile.readPremiumSessionServer(),
-                ServerProxyConfigFile.readPremiumPassRealIp()
+                ServerProxyConfigFile.readPremiumPassRealIp(),
+                ServerProxyConfigFile.readPremiumUuidGuard()
             );
-            LOGGER.info("[zstdnet-server] built-in premium verification enabled (mode={}); backend forced to offline-mode in memory so zstd compression stays effective.",
-                strict ? "strict" : "lenient");
+            LOGGER.info("[zstdnet-server] built-in premium verification enabled (mode={}, uuid_guard={}, session_servers={}); backend forced to offline-mode in memory so zstd compression stays effective.",
+                strict ? "strict" : "lenient", PremiumAuthState.uuidGuardEnabled(), PremiumAuthState.sessionBaseUrls());
             return;
         }
         PremiumAuthState.disable();

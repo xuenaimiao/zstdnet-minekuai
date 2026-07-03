@@ -4,6 +4,8 @@ import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier.SessionFetcher;
 import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier.VerifiedProfile;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -94,5 +96,47 @@ class MojangPremiumVerifierTest {
         SessionFetcher fetcher = url -> new SessionFetcher.Response(200, SAMPLE);
         assertNull(MojangPremiumVerifier.verify(MojangPremiumVerifier.MOJANG_SESSION_BASE, "", "deadbeef", null, fetcher));
         assertNull(MojangPremiumVerifier.verify(MojangPremiumVerifier.MOJANG_SESSION_BASE, "Notch", "", null, fetcher));
+    }
+
+    @Test
+    void verifyRetriesWithSessionserverPathOn404() {
+        // authlib-injector 皮肤站惯例给 API 根地址：直连 404 → 自动补 /sessionserver 路径重试。
+        List<String> calls = new ArrayList<>();
+        SessionFetcher fetcher = url -> {
+            calls.add(url);
+            return url.contains("/sessionserver/session/minecraft/hasJoined")
+                ? new SessionFetcher.Response(200, SAMPLE)
+                : new SessionFetcher.Response(404, "");
+        };
+        VerifiedProfile profile = MojangPremiumVerifier.verify(
+            "https://littleskin.cn/api/yggdrasil", "Notch", "deadbeef", null, fetcher);
+        assertNotNull(profile);
+        assertEquals(2, calls.size());
+        assertTrue(calls.get(0).startsWith("https://littleskin.cn/api/yggdrasil/session/minecraft/hasJoined"));
+        assertTrue(calls.get(1).startsWith("https://littleskin.cn/api/yggdrasil/sessionserver/session/minecraft/hasJoined"));
+    }
+
+    @Test
+    void verifyDoesNotRetryWhenBaseAlreadyHasSessionserverPath() {
+        List<String> calls = new ArrayList<>();
+        SessionFetcher fetcher = url -> {
+            calls.add(url);
+            return new SessionFetcher.Response(404, "");
+        };
+        assertNull(MojangPremiumVerifier.verify(
+            "https://littleskin.cn/api/yggdrasil/sessionserver", "Notch", "deadbeef", null, fetcher));
+        assertEquals(1, calls.size());
+    }
+
+    @Test
+    void verifyDoesNotRetryOnPlainMiss204() {
+        List<String> calls = new ArrayList<>();
+        SessionFetcher fetcher = url -> {
+            calls.add(url);
+            return new SessionFetcher.Response(204, "");
+        };
+        assertNull(MojangPremiumVerifier.verify(
+            "https://littleskin.cn/api/yggdrasil", "Notch", "deadbeef", null, fetcher));
+        assertEquals(1, calls.size());
     }
 }

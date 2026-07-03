@@ -75,6 +75,22 @@ public final class MojangPremiumVerifier {
         if (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
+
+        SessionFetcher.Response response = fetchQuietly(fetcher, hasJoinedUrl(base, username, serverId, clientIp));
+        if (response != null && isPathMiss(response.status()) && !base.contains("/sessionserver")) {
+            // authlib-injector 皮肤站惯例给的是 API 根地址（如 https://littleskin.cn/api/yggdrasil），
+            // 其会话服在 <根>/sessionserver 下 → 直连 404/405 时自动补路径重试，管理员少踩一坑。
+            response = fetchQuietly(fetcher, hasJoinedUrl(base + "/sessionserver", username, serverId, clientIp));
+        }
+        if (response == null || response.status() != 200 || response.body() == null || response.body().trim().isEmpty()) {
+            // 204 / 空体 = 会话服未确认该玩家在此 serverId 下完成 join → 未通过。
+            return null;
+        }
+        return parse(response.body());
+    }
+
+    /** 拼 {@code hasJoined} 查询 URL。 */
+    private static String hasJoinedUrl(String base, String username, String serverId, String clientIp) {
         StringBuilder url = new StringBuilder(base)
             .append("/session/minecraft/hasJoined?username=")
             .append(encodeUtf8(username))
@@ -83,18 +99,21 @@ public final class MojangPremiumVerifier {
         if (clientIp != null && !clientIp.trim().isEmpty()) {
             url.append("&ip=").append(encodeUtf8(clientIp.trim()));
         }
+        return url.toString();
+    }
 
-        SessionFetcher.Response response;
+    /** 网络/协议异常归一为 {@code null}（未通过）。 */
+    private static SessionFetcher.Response fetchQuietly(SessionFetcher fetcher, String url) {
         try {
-            response = fetcher.get(url.toString());
+            return fetcher.get(url);
         } catch (Exception e) {
             return null;
         }
-        if (response == null || response.status() != 200 || response.body() == null || response.body().trim().isEmpty()) {
-            // 204 / 空体 = Mojang 未确认该玩家在此 serverId 下完成 join → 未通过。
-            return null;
-        }
-        return parse(response.body());
+    }
+
+    /** 该状态码是否说明「路径不存在」而非「核验未通过」（→ 值得按 authlib-injector 布局补路径重试）。 */
+    private static boolean isPathMiss(int status) {
+        return status == 404 || status == 405 || status == 410;
     }
 
     /** UTF-8 URL 编码（UTF-8 始终可用，理论不可达异常归一为原串）。 */

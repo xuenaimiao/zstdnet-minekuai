@@ -30,9 +30,10 @@ ZSTD 只能压缩明文。原版 online-mode 的加密握手（`EncryptionReques
 | 键 | 取值 | 默认 | 说明 |
 |---|---|---|---|
 | `premium_verification` | `auto` / `on` / `off` | `auto` | 总开关。`auto` **跟随 `server.properties` 的 `online-mode`**：`online-mode=true` 即开启验证；`online-mode=false` 即纯离线。`on`/`off` 手动强制。 |
-| `premium_verification_mode` | `lenient` / `strict` | `lenient` | 验证不通过（盗版/没装本 mod/客户端离线会话）时：`lenient`=回落离线 UUID 照常进服；`strict`=拒绝。与总开关正交。 |
-| `premium_session_server` | URL / 空 | 空(=Mojang) | 会话服务基址，可对接 authlib-injector / 自建 Yggdrasil。 |
+| `premium_verification_mode` | `lenient` / `strict` | `lenient` | 验证不通过（盗版/没装本 mod/客户端离线会话）时：`lenient`=回落离线 UUID 照常进服；`strict`=拒绝。与总开关正交。lenient 下「曾正版进服的玩家名」不会被静默降级——见 `premium_uuid_guard`。 |
+| `premium_session_server` | URL 列表 / 空 | 空(=自动) | 会话服基址，**支持逗号/分号分隔多个**，按序核验、命中即通过（serverId 为一次性 nonce，多问几家不会误判）。条目可写 `mojang`（=官方）、authlib-injector 皮肤站 **API 根地址**（如 `https://littleskin.cn/api/yggdrasil`，缺 `/sessionserver` 路径会自动补）或完整 sessionserver 基址。**留空=自动**：Mojang 官方；若检测到服务端 JVM 以 authlib-injector（`-javaagent`）启动，自动把该皮肤站一并纳入核验（皮肤站优先）→ LittleSkin / LinkSkin 等外置登录零配置可用。 |
 | `premium_pass_real_ip` | `true`/`false` | `false` | 核验时是否把玩家真实 IP 交给会话服（类 prevent-proxy-connections）。 |
+| `premium_uuid_guard` | `true`/`false` | `true` | **正版身份保护（防背包/数据「丢失」）**。凡曾以正版身份进入本服的玩家名（自动记录于 `config/zstdnet-premium-players.properties`），若本次正版会话校验未通过（启动器会话过期、盗版冒名等），将被**拒绝并明确提示「请重新登录启动器」**，而不是按 lenient 静默回落离线 UUID（离线 UUID 加载不到原先绑定正版 UUID 的存档，玩家侧表现为背包/进度被清空）。删除名单条目即解除对应玩家的保护。 |
 
 ### 自动检测（A0，`DedicatedServerAutoPort`）
 - 解析三态总开关 + `online-mode` → 得到 `verificationEnabled`。
@@ -116,6 +117,16 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
 - **玩家档案迁移**：开启后被验证玩家从离线 UUID（`OfflinePlayer:<name>`）切到正版 UUID，原有离线 `playerdata` 不会自动加载（与任何离线→在线切换同理）。建议在新服或可接受重置时启用；后续可加「按名映射」一次性迁移。
 - 依赖两端都装 ZstdNet（本就是硬要求）；原版/盗版客户端不应答查询 → 按 `premium_verification_mode` 处理（默认宽松=离线进服）。
 - `premium_session_server` 可对接外置登录；`premium_pass_real_ip` 默认关（CGNAT 等场景 IP 可能不一致）。
+- **正版身份保护（`premium_uuid_guard`，默认开）**：验证成功即把「玩家名 → 正版 UUID」登记进
+  `config/zstdnet-premium-players.properties`（`PremiumPlayerRegistry`，写入走临时文件+原子替换，每次查询直读文件、
+  手工编辑免重启）。此后同名玩家验证失败时（会话过期/冒名），lenient 不再静默降级离线，而是断开并给出双语提示
+  （`PremiumVerificationService.rejectionMessage`）。这解决了「正版会话失效 → 无提示地以离线 UUID 进服 → 加载不到
+  原存档、背包看似清空」的问题；决策逻辑三分支：strict 恒拒 / 保护命中拒绝 / 其余宽松放行（`decide()`，有单测）。
+- **皮肤站（authlib-injector / LittleSkin / LinkSkin 等）兼容**：核验支持多会话服（`PremiumAuthState.parseSessionBases`）。
+  客户端挂 authlib-injector 时其 `joinServer` 会打到皮肤站，服务端若只查 Mojang 必然核验不过（strict 表现为反复
+  「验证失败」进不去；lenient 表现为静默离线降级）。现在：① 服务端 JVM 挂了 authlib-injector 时自动探测其 API 根地址
+  （`AuthlibInjectorDetector`，解析 `-javaagent` 参数，与 injector 版本无关）并纳入核验；② `premium_session_server`
+  可显式填多个基址；③ 皮肤站惯用的 API 根地址会在 404/405 时自动补 `/sessionserver` 路径重试（`MojangPremiumVerifier`）。
 - **TAB 列表头像**：原版 `PlayerTabOverlay` 仅在「本地服 或 连接已加密」时绘制玩家名左侧的头像（1.19+ 安全聊天门控）。
   ZstdNet 为压缩明文而<b>刻意不开 AES</b>，故正版玩家世界内皮肤正常、TAB 头像却被原版隐藏（表现同离线服「只有名字」）。
   客户端补丁点 `zstdnet_tab_player_head`（Forge/NeoForge coremod）/ `PlayerTabOverlayMixin`（Fabric）把那处

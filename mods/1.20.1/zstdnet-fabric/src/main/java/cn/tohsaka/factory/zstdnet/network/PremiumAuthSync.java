@@ -23,6 +23,7 @@ import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier;
 import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier.VerifiedProfile;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthProtocol;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthState;
+import cn.tohsaka.factory.zstdnet.auth.PremiumVerificationService;
 import cn.tohsaka.factory.zstdnet.coremod.ServerRealIpHooks;
 import cn.tohsaka.factory.zstdnet.mixin.ServerLoginPacketListenerImplAccessor;
 import com.mojang.authlib.GameProfile;
@@ -111,25 +112,23 @@ public final class PremiumAuthSync {
                 byte[] nonce = PENDING.remove(handler);
                 String username = profileName(handler);
                 if (!understood) {
-                    applyPolicyOnFailure(handler, "client does not have ZstdNet premium verification");
+                    applyPolicyOnFailure(handler, username, "client does not have ZstdNet premium verification");
                     return;
                 }
                 PremiumAuthProtocol.Answer answer = PremiumAuthProtocol.decodeAnswer(readAll(buf));
                 if (!answer.authenticated() || nonce == null || username == null) {
-                    applyPolicyOnFailure(handler, "client reported no valid premium session");
+                    applyPolicyOnFailure(handler, username, "client reported no valid premium session");
                     return;
                 }
                 String serverId = PremiumAuthProtocol.serverIdFromNonce(nonce);
                 String clientIp = PremiumAuthState.passRealIp() ? clientIp(handler) : null;
                 synchronizer.waitFor(CompletableFuture.runAsync(() -> {
-                    VerifiedProfile profile = MojangPremiumVerifier.verify(
-                        PremiumAuthState.sessionBaseUrl(), username, serverId, clientIp,
-                        MojangPremiumVerifier.defaultFetcher());
+                    VerifiedProfile profile = PremiumVerificationService.verify(username, serverId, clientIp);
                     if (profile != null) {
                         ((ServerLoginPacketListenerImplAccessor) handler).zstdnet$setGameProfile(buildProfile(profile));
                         LOGGER.info("[zstdnet-server] verified premium player {} -> {}", username, profile.id());
                     } else {
-                        applyPolicyOnFailure(handler, "session server did not confirm " + username);
+                        applyPolicyOnFailure(handler, username, "session server did not confirm " + username);
                     }
                 }, EXECUTOR));
             });
@@ -165,14 +164,11 @@ public final class PremiumAuthSync {
         });
     }
 
-    private static void applyPolicyOnFailure(ServerLoginPacketListenerImpl handler, String reason) {
-        if (PremiumAuthState.isStrict()) {
-            handler.disconnect(Component.literal(
-                "ZstdNet：正版验证失败，本服仅允许正版账号进入。\n"
-                    + "Premium verification failed — this server only accepts verified premium accounts."));
-            LOGGER.info("[zstdnet-server] rejected login (strict premium): {}", reason);
-        } else {
-            LOGGER.info("[zstdnet-server] premium verification not satisfied ({}); proceeding with offline identity (lenient).", reason);
+    /** 验证不通过：由共享策略决定——strict / 正版身份保护 → 断开，其余宽松放行（日志在策略内打印）。 */
+    private static void applyPolicyOnFailure(ServerLoginPacketListenerImpl handler, String username, String reason) {
+        String rejection = PremiumVerificationService.rejectionMessage(username, reason);
+        if (rejection != null) {
+            handler.disconnect(Component.literal(rejection));
         }
     }
 

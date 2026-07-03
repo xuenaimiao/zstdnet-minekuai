@@ -23,6 +23,7 @@ import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier;
 import cn.tohsaka.factory.zstdnet.auth.MojangPremiumVerifier.VerifiedProfile;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthProtocol;
 import cn.tohsaka.factory.zstdnet.auth.PremiumAuthState;
+import cn.tohsaka.factory.zstdnet.auth.PremiumVerificationService;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
 import com.mojang.logging.LogUtils;
@@ -109,7 +110,7 @@ public final class PremiumAuthServerHooks {
                 // 发送失败：宽松放行，严格拒绝
                 LOGGER.warn("[zstdnet-server] failed to send premium challenge: {}", t.toString());
                 pending.phase = Phase.PROCEED;
-                return finalizeFailure(listener, "could not send premium challenge");
+                return finalizeFailure(listener, username, "could not send premium challenge");
             }
             return false;
         }
@@ -140,22 +141,20 @@ public final class PremiumAuthServerHooks {
         String clientIp = PremiumAuthState.passRealIp() ? clientIp(listener) : null;
         EXECUTOR.execute(() -> {
             try {
-                VerifiedProfile profile = MojangPremiumVerifier.verify(
-                    PremiumAuthState.sessionBaseUrl(), pending.username, serverId, clientIp,
-                    MojangPremiumVerifier.defaultFetcher());
+                VerifiedProfile profile = PremiumVerificationService.verify(pending.username, serverId, clientIp);
                 if (profile != null) {
                     setProfile(listener, buildProfile(profile));
                     LOGGER.info("[zstdnet-server] verified premium player {} -> {}", pending.username, profile.id());
                     pending.phase = Phase.PROCEED;
                 } else {
-                    finalizeFailure(listener, "session server did not confirm " + pending.username);
+                    finalizeFailure(listener, pending.username, "session server did not confirm " + pending.username);
                     if (pending.phase != Phase.REJECT) {
                         pending.phase = Phase.PROCEED;
                     }
                 }
             } catch (Throwable t) {
                 LOGGER.warn("[zstdnet-server] premium verification error for {}: {}", pending.username, t.toString());
-                finalizeFailure(listener, "verification error");
+                finalizeFailure(listener, pending.username, "verification error");
                 if (pending.phase != Phase.REJECT) {
                     pending.phase = Phase.PROCEED;
                 }
@@ -164,21 +163,18 @@ public final class PremiumAuthServerHooks {
         return true;
     }
 
-    /** 验证不通过：严格断开（返回 false），宽松放行（返回 true）。 */
-    private static boolean finalizeFailure(ServerLoginPacketListenerImpl listener, String reason) {
-        if (PremiumAuthState.isStrict()) {
-            Pending pending = PENDING.get(listener);
-            if (pending != null) {
-                pending.phase = Phase.REJECT;
-            }
-            listener.disconnect(Component.literal(
-                "ZstdNet：正版验证失败，本服仅允许正版账号进入。\n"
-                    + "Premium verification failed — this server only accepts verified premium accounts."));
-            LOGGER.info("[zstdnet-server] rejected login (strict premium): {}", reason);
-            return false;
+    /** 验证不通过：由共享策略决定——strict / 正版身份保护 → 断开（返回 false），其余宽松放行（返回 true）。 */
+    private static boolean finalizeFailure(ServerLoginPacketListenerImpl listener, String username, String reason) {
+        String rejection = PremiumVerificationService.rejectionMessage(username, reason);
+        if (rejection == null) {
+            return true;
         }
-        LOGGER.info("[zstdnet-server] premium verification not satisfied ({}); proceeding with offline identity (lenient).", reason);
-        return true;
+        Pending pending = PENDING.get(listener);
+        if (pending != null) {
+            pending.phase = Phase.REJECT;
+        }
+        listener.disconnect(Component.literal(rejection));
+        return false;
     }
 
     private static void sendChallenge(Connection connection, byte[] nonce) {
