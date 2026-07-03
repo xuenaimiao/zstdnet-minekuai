@@ -21,6 +21,7 @@ package cn.tohsaka.factory.zstdnet.proxy;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.Locale;
 
 /**
  * 判定一个连接目标是否属于「局域网 / 本机」范畴。
@@ -68,5 +69,46 @@ public final class ConnectTargets {
      */
     public static boolean isDirectLanTarget(InetSocketAddress sock) {
         return sock != null && isDirectLanTarget(sock.getAddress());
+    }
+
+    /**
+     * 已知「联机映射 / 内网穿透」服务的节点域名后缀。
+     *
+     * <p>这类服务（樱花frp / OpenFrp 等）常被用来把「开放到局域网」的原版端口直接映射到公网——
+     * 此时映射地址虽是公网域名，但端口后面并没有 ZstdNet 服务端，强制 ZSTD 只会把玩家挡在门外。
+     * 该列表仅用于日志与聊天提示的措辞（“识别为联机映射节点”），<b>不改变</b>连接决策：
+     * 是否回退直连由 {@code ZstdProbe} 的实际探测结果决定——真挂在 frp 后面的 ZstdNet
+     * 服务器（本 mod 的主场景）探测能通过，照常压缩，不受此列表影响。</p>
+     */
+    private static final String[] KNOWN_RELAY_HOST_SUFFIXES = {
+        // SakuraFrp（樱花frp）：节点域名（新 natfrp.cloud / 旧 sakurafrp.com）与子域绑定 nyat.app
+        ".natfrp.cloud",
+        ".natfrp.com",
+        ".sakurafrp.com",
+        ".nyat.app",
+        // OpenFrp：节点域名
+        ".ofalias.com",
+        ".ofalias.net",
+    };
+
+    /**
+     * @param host 用户输入 / SRV 解析后的目标主机名（IP 直接回 {@code false}）
+     * @return 是否为已知联机映射（樱花frp / OpenFrp 等）节点域名
+     */
+    public static boolean isKnownRelayHost(String host) {
+        if (host == null) {
+            return false;
+        }
+        String normalized = host.trim().toLowerCase(Locale.ROOT);
+        if (normalized.endsWith(".")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        for (String suffix : KNOWN_RELAY_HOST_SUFFIXES) {
+            // 只认真正的子域（node1.natfrp.cloud），不把裸域名（natfrp.com 官网）算作节点。
+            if (normalized.length() > suffix.length() && normalized.endsWith(suffix)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

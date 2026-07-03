@@ -49,15 +49,22 @@ public final class ClientConfig {
     private static volatile boolean cachePersist = true;
     private static volatile long cachePersistBytes = 0L;
     private static volatile boolean compressLan = false;
+    private static volatile boolean rawFallback = true;
     private static volatile boolean initialized;
 
-    // compress_lan 由共享的 ClientCompressionConfig 之外单独解析（其 Parsed 记录不含该项，
-    // 且 mods/common 不改），首次写文件时把这段带注释的默认追加到共享模板末尾。
-    private static final String COMPRESS_LAN_CONFIG_BLOCK = """
+    // compress_lan / raw_fallback 由共享的 ClientCompressionConfig 之外单独解析（其 Parsed 记录不含
+    // 这些项，且 mods/common 不改），首次写文件时把这段带注释的默认追加到共享模板末尾。
+    private static final String EXTRA_CONFIG_BLOCK = """
 
         # Compress LAN/loopback/private-IP targets too (for FRP/tunnel). Default off: LAN uses a plain
         # direct connection, same as without the mod. Public servers always compress regardless.
         compress_lan=false
+
+        # Probe the server before taking over: if it does not answer ZSTD (e.g. a SakuraFrp/OpenFrp
+        # tunnel mapping a vanilla LAN port), fall back to a plain direct connection and show a chat
+        # notice after joining. Default on. Set false to force ZSTD (join fails with an error when
+        # the server lacks ZstdNet).
+        raw_fallback=true
         """;
 
     private ClientConfig() {
@@ -95,6 +102,14 @@ public final class ClientConfig {
             init();
         }
         return compressLan;
+    }
+
+    /** 服务端不说 ZSTD（樱花等联机映射的原版端口）时是否回退原版直连。默认 true。 */
+    public static boolean rawFallback() {
+        if (!initialized) {
+            init();
+        }
+        return rawFallback;
     }
 
     public static CompressionOptions compression() {
@@ -137,7 +152,7 @@ public final class ClientConfig {
         try {
             Files.createDirectories(PATH.getParent());
             if (!Files.exists(PATH)) {
-                Files.writeString(PATH, ClientCompressionConfig.defaultConfigBody() + COMPRESS_LAN_CONFIG_BLOCK, StandardCharsets.UTF_8);
+                Files.writeString(PATH, ClientCompressionConfig.defaultConfigBody() + EXTRA_CONFIG_BLOCK, StandardCharsets.UTF_8);
                 return fallback;
             }
         } catch (IOException ignored) {
@@ -152,6 +167,9 @@ public final class ClientConfig {
         }
         String compressLanRaw = properties.getProperty("compress_lan");
         compressLan = compressLanRaw != null && Boolean.parseBoolean(compressLanRaw.trim());
+        // 缺省（旧配置文件没有该键）时默认 true：开箱即兼容樱花等联机映射。
+        String rawFallbackRaw = properties.getProperty("raw_fallback");
+        rawFallback = rawFallbackRaw == null || Boolean.parseBoolean(rawFallbackRaw.trim());
         return ClientCompressionConfig.parse(properties, PATH.getParent(), LOGGER);
     }
 }

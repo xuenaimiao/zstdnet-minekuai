@@ -25,6 +25,8 @@ import cn.tohsaka.factory.zstdnet.core.compress.CompressionOptions;
 import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.proxy.ConnectTargets;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
+import cn.tohsaka.factory.zstdnet.proxy.RawFallbackNotice;
+import cn.tohsaka.factory.zstdnet.proxy.ZstdProbe;
 import net.minecraft.client.multiplayer.ServerAddress;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -94,6 +96,19 @@ public final class ConnectScreenHooks {
         String connectHost = resolved.getHostString();
         if (connectHost == null || connectHost.trim().isEmpty()) {
             connectHost = ip;
+        }
+
+        // 新的连接决策开始：清掉上一次连接可能残留的回退提示。
+        RawFallbackNotice.clear();
+
+        // 回退兼容（raw_fallback，默认开）：对端不说 ZSTD（樱花等联机映射的原版端口）→ 不接管，原样直连；
+        // 连不上（可能离线）→ 照常接管，保留既有的登录期友好报错。与 ClientProxyPublisher.connect 一致。
+        if (ClientConfig.rawFallback()
+            && ZstdProbe.probe(connectHost, port) == ZstdProbe.Result.NO_ZSTD) {
+            boolean knownRelay = ConnectTargets.isKnownRelayHost(ip) || ConnectTargets.isKnownRelayHost(connectHost);
+            LOGGER.info("zstdnet: intercepted connect {} does not speak ZSTD -> keep vanilla direct connection (knownRelay={})", remoteAddr, knownRelay);
+            RawFallbackNotice.arm(remoteAddr, knownRelay);
+            return original;
         }
 
         try {

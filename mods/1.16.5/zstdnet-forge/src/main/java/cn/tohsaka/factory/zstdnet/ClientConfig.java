@@ -37,6 +37,7 @@ public final class ClientConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger(ClientConfig.class);
     private static final ForgeConfigSpec.IntValue LEVEL;
     private static final ForgeConfigSpec.BooleanValue COMPRESS_LAN;
+    private static final ForgeConfigSpec.BooleanValue RAW_FALLBACK;
     private static final ForgeConfigSpec.BooleanValue LONG_DISTANCE_MATCHING;
     private static final ForgeConfigSpec.IntValue WINDOW_LOG;
     private static final ForgeConfigSpec.ConfigValue<String> DICTIONARY;
@@ -54,6 +55,9 @@ public final class ClientConfig {
         COMPRESS_LAN = builder
             .comment("Compress LAN/loopback/private-IP targets too (for FRP/tunnel). Default off: LAN uses a plain direct connection, same as without the mod. Public servers always compress regardless.")
             .define("compress_lan", false);
+        RAW_FALLBACK = builder
+            .comment("Probe the server before taking over: if it does not answer ZSTD (e.g. a SakuraFrp/OpenFrp tunnel mapping a vanilla LAN port), fall back to a plain direct connection and show a chat notice after joining. Default on. Set false to force ZSTD (join fails with an error when the server lacks ZstdNet).")
+            .define("raw_fallback", true);
         LONG_DISTANCE_MATCHING = builder
             .comment("Enable long-distance matching (better ratio on repetitive servers, more memory). Default off.")
             .define("long_distance_matching", false);
@@ -89,6 +93,11 @@ public final class ClientConfig {
     /** 是否对局域网/本机/私网目标也启用压缩。默认 false：局域网走原版直连。 */
     public static boolean compressLan() {
         return COMPRESS_LAN.get();
+    }
+
+    /** 服务端不说 ZSTD（樱花等联机映射的原版端口）时是否回退原版直连。默认 true。 */
+    public static boolean rawFallback() {
+        return RAW_FALLBACK.get();
     }
 
     public static CompressionOptions compression() {

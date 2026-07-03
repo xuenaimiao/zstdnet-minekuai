@@ -506,6 +506,15 @@ Notes:
   - Higher levels provide better compression but increase CPU usage
   - It is recommended to choose between 3-5 to balance compression effect and performance
 
+- `raw_fallback`：automatically fall back to a plain vanilla connection when the server has no ZstdNet (default: true, **on by default**)
+  - On "Join Server" the client first sends a **zstd-compressed status probe**: only a ZstdNet server can answer it.
+    If the peer does not speak ZSTD (typical case: **a SakuraFrp/OpenFrp tunnel mapping a vanilla "Open to LAN" port straight to the public internet**, with no ZstdNet behind that port) → the client joins over a **plain direct connection** and prints a chat notice ("this session is uncompressed") after joining
+  - If the probe cannot even connect (server offline / wrong address) → the ZSTD proxy path is kept, so the existing clear error messages still apply
+  - ZstdNet servers genuinely behind FRP tunnels are unaffected: they pass the probe and compress as usual
+  - Set to `false` for the old behavior: force ZSTD and fail the login with an error when the server lacks ZstdNet
+
+- `compress_lan`：also compress LAN/loopback/private-IP targets (default: false, LAN uses a plain direct connection)
+
 - `long_distance_matching`：Enable LDM for the client->server stream (default: false)
 - `window_log`：LDM window exponent (default: 0 = conservative 24); only set >27 if the target server uses it too
 - `dictionary`：Manual dictionary file under `config/zstdnet/dict/` (default: empty)

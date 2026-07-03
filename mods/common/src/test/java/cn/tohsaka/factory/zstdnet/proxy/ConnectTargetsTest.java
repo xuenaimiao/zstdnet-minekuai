@@ -91,4 +91,30 @@ class ConnectTargetsTest {
         assertTrue(ConnectTargets.isDirectLanTarget(new InetSocketAddress(ip("192.168.0.1"), 25565)));
         assertFalse(ConnectTargets.isDirectLanTarget(new InetSocketAddress(ip("8.8.8.8"), 25565)));
     }
+
+    @Test
+    void knownRelayHostsAreRecognized() {
+        // SakuraFrp（樱花frp）节点域名 / 子域绑定
+        assertTrue(ConnectTargets.isKnownRelayHost("cn-hk-nf-1.natfrp.cloud"));
+        assertTrue(ConnectTargets.isKnownRelayHost("cn-sy-plc-1.sakurafrp.com"));
+        assertTrue(ConnectTargets.isKnownRelayHost("mc.example.nyat.app"));
+        // OpenFrp 节点域名
+        assertTrue(ConnectTargets.isKnownRelayHost("example.ofalias.com"));
+        assertTrue(ConnectTargets.isKnownRelayHost("node2.ofalias.net"));
+        // 大小写 / 末尾点容忍
+        assertTrue(ConnectTargets.isKnownRelayHost("CN-HK-NF-1.NatFrp.Cloud"));
+        assertTrue(ConnectTargets.isKnownRelayHost("cn-hk-nf-1.natfrp.cloud."));
+    }
+
+    @Test
+    void nonRelayHostsAreNotRecognized() {
+        assertFalse(ConnectTargets.isKnownRelayHost(null));
+        assertFalse(ConnectTargets.isKnownRelayHost(""));
+        assertFalse(ConnectTargets.isKnownRelayHost("mc.hypixel.net"));
+        assertFalse(ConnectTargets.isKnownRelayHost("8.8.8.8"));
+        // 裸域名（官网）不算节点；形似但不同的域名不误判。
+        assertFalse(ConnectTargets.isKnownRelayHost("natfrp.com"));
+        assertFalse(ConnectTargets.isKnownRelayHost("nyat.app"));
+        assertFalse(ConnectTargets.isKnownRelayHost("evil-natfrp.cloud.example.com"));
+    }
 }

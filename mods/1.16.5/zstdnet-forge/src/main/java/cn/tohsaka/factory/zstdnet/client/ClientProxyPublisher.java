@@ -27,6 +27,8 @@ import cn.tohsaka.factory.zstdnet.platform.Platforms;
 import cn.tohsaka.factory.zstdnet.Branding;
 import cn.tohsaka.factory.zstdnet.proxy.ConnectTargets;
 import cn.tohsaka.factory.zstdnet.proxy.LocalZstdNet;
+import cn.tohsaka.factory.zstdnet.proxy.RawFallbackNotice;
+import cn.tohsaka.factory.zstdnet.proxy.ZstdProbe;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyBootstrap;
 import cn.tohsaka.factory.zstdnet.server.ServerProxyConfigFile;
 import com.mojang.blaze3d.matrix.MatrixStack;
@@ -249,6 +251,7 @@ public final class ClientProxyPublisher {
         }
 
         Minecraft minecraft = Minecraft.getInstance();
+        maybeShowRawFallbackNotice(minecraft);
         boolean inSingleplayerWorld = minecraft.player != null && minecraft.getIntegratedServer() != null;
         if (!inSingleplayerWorld) {
             singleplayerLanHintShown = false;
@@ -261,6 +264,22 @@ public final class ClientProxyPublisher {
         sendClientMessage(new TranslationTextComponent("zstdnet.singleplayer.lan_hint"));
         sendClientMessage(new TranslationTextComponent("zstdnet.singleplayer.lan_command_hint"));
         singleplayerLanHintShown = true;
+    }
+
+    /** raw_fallback 直连进服后，把「服务器没有 ZstdNet、本次未压缩」的提示打进聊天栏（每次连接只打一次）。 */
+    private void maybeShowRawFallbackNotice(Minecraft minecraft) {
+        if (minecraft.player == null || minecraft.getCurrentServerData() == null) {
+            return;
+        }
+        RawFallbackNotice.Notice notice = RawFallbackNotice.take();
+        if (notice == null) {
+            return;
+        }
+        sendClientMessage(new TranslationTextComponent(
+            notice.knownRelay() ? "zstdnet.fallback.relay_notice" : "zstdnet.fallback.notice",
+            notice.address()
+        ));
+        sendClientMessage(new TranslationTextComponent("zstdnet.fallback.hint"));
     }
 
     private void onRenderGui(RenderGameOverlayEvent.Post event) {
@@ -599,6 +618,9 @@ public final class ClientProxyPublisher {
             return false;
         }
 
+        // 新的连接决策开始：清掉上一次连接可能残留的回退提示，避免串到本次服务器。
+        RawFallbackNotice.clear();
+
         // 局域网/本机/私网目标：默认直连，不起压缩代理；仅 compress_lan 显式开启时才压缩。
         if (remote.directLan() && !ClientConfig.compressLan()) {
             serverData.serverIP = remoteAddr;
@@ -606,6 +628,23 @@ public final class ClientProxyPublisher {
             ConnectScreenHooks.setBypass(true);
             // 1.16.5 无静态 ConnectScreen.startConnecting；ConnectingScreen(parent,mc,serverData)
             // 会 setServerData 并读取 serverData.serverIP 发起连接。
+            Minecraft mc = Minecraft.getInstance();
+            mc.displayGuiScreen(new ConnectingScreen(parent, mc, serverData));
+            return true;
+        }
+
+        // 回退兼容（raw_fallback，默认开）：接管前先探测服务端是否真的会说 ZSTD。樱花frp 等联机映射
+        // 把「原版局域网端口」映到公网时，目标端口后面并没有 ZstdNet 服务端，强制 ZSTD 只会把玩家挡在门外。
+        // 探测确认对端不说 ZSTD（NO_ZSTD）→ 改用原版直连进入，进服后聊天栏提示；
+        // 探测连不上（UNREACHABLE，服务器可能离线）→ 仍走 ZSTD 代理，保留既有的登录期友好报错。
+        if (ClientConfig.rawFallback()
+            && ZstdProbe.probe(remote.connectHost(), remote.connectPort()) == ZstdProbe.Result.NO_ZSTD) {
+            boolean knownRelay = ConnectTargets.isKnownRelayHost(LocalZstdNet.HostPort.parse(remoteAddr).host())
+                || ConnectTargets.isKnownRelayHost(remote.connectHost());
+            serverData.serverIP = remoteAddr;
+            LOGGER.info("zstdnet: {} does not speak ZSTD -> vanilla direct connection (knownRelay={})", remoteAddr, knownRelay);
+            RawFallbackNotice.arm(remoteAddr, knownRelay);
+            ConnectScreenHooks.setBypass(true);
             Minecraft mc = Minecraft.getInstance();
             mc.displayGuiScreen(new ConnectingScreen(parent, mc, serverData));
             return true;

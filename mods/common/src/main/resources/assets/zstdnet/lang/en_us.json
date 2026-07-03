@@ -41,6 +41,9 @@
   "zstdnet.command.port.voice_status": "Current voice public entry: %s, backend voice port: %s.",
   "zstdnet.command.port.voice_target_set": "Set backend voice port to %s.",
   "zstdnet.command.port.voice_listen_set": "Set voice public entry to %s.",
+  "zstdnet.fallback.notice": "ZstdNet: server %s does not run ZstdNet; joined over a plain direct connection (this session is uncompressed).",
+  "zstdnet.fallback.relay_notice": "ZstdNet: tunnel node %s (SakuraFrp/OpenFrp etc.) does not answer ZSTD — it likely maps a vanilla LAN port; joined over a plain direct connection (this session is uncompressed).",
+  "zstdnet.fallback.hint": "If the server does have ZstdNet, make sure you are connecting to its Zstd proxy port. Set raw_fallback=false in zstdnet-client.toml to force compression again.",
   "zstdnet.command.voice.no_permission": "Only the local host with admin permission can change ZstdNet config.",
   "zstdnet.command.voice.write_failed": "Failed to write zstdnet-server.properties.",
   "zstdnet.command.port.write_failed": "Failed to write zstdnet-server.properties."
