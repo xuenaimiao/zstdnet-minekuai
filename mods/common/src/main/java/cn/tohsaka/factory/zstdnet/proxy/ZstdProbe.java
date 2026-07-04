@@ -32,6 +32,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -44,11 +45,16 @@ import java.nio.charset.StandardCharsets;
  * 所以反过来发一次 <b>zstd 压缩的 status 请求</b>：只有 ZstdNet 服务端能解出来并回出合法的
  * <b>zstd 压缩</b> status 响应；原版端口把压缩字节当垃圾（断开或沉默）。</p>
  *
- * <p>结果三态（调用方据此决策，见各变体 ClientProxyPublisher / ConnectScreenHooks）：</p>
+ * <p>结果四态（调用方仅在 {@link Result#NO_ZSTD} 时回退原版直连，其余一律维持 ZSTD 代理；
+ * 见各变体 ClientProxyPublisher / ConnectScreenHooks）：</p>
  * <ul>
  *     <li>{@link Result#ZSTD}：对端回出了合法的压缩 status 响应 → 照常走 ZSTD 代理；</li>
- *     <li>{@link Result#NO_ZSTD}：TCP 通了但对端不说 ZSTD（回了垃圾 / 直接断开 / 限时内沉默）
- *         → 回退原版直连；</li>
+ *     <li>{@link Result#NO_ZSTD}：TCP 通了、且拿到<b>确凿</b>的负面信号（对端断开 / 复位 /
+ *         回了非法压缩字节）→ 断定对端不说 ZSTD，回退原版直连；</li>
+ *     <li>{@link Result#AMBIGUOUS}：TCP 通了但限时内<b>沉默</b>（读超时）→ 无法断定：真实
+ *         ZstdNet 服务端跨区/高延迟/GC 卡顿也会这样。此时<b>不</b>回退——否则会把一个能连的
+ *         ZSTD-only 服务端错误地用原版直连过去、被判 RAW_LOGIN 直接踢下线（弄巧成拙）。
+ *         维持 ZSTD 代理路径，沿用既有登录期友好报错；</li>
  *     <li>{@link Result#UNREACHABLE}：TCP 都连不上（离线 / 地址错）→ 保持 ZSTD 代理路径，
  *         让既有的登录期友好报错（DISCONNECT_UNREACHABLE 等）继续生效。</li>
  * </ul>
@@ -58,8 +64,12 @@ public final class ZstdProbe {
 
     /** TCP 连接超时：探测在点击「加入服务器」的渲染线程上同步执行，须给出可忍受的上限。 */
     public static final int DEFAULT_CONNECT_TIMEOUT_MS = 2500;
-    /** 响应读超时：status 往返极轻（1~2 RTT），2.5s 内没有合法压缩响应即判 NO_ZSTD。 */
-    public static final int DEFAULT_READ_TIMEOUT_MS = 2500;
+    /**
+     * 响应读超时：status 往返极轻（1~2 RTT）。超时不再等同「不说 ZSTD」——它只判 {@link Result#AMBIGUOUS}
+     * 并维持 ZSTD 路径，所以这里取较短值（1.5s）以压低点击加入时的主线程卡顿；真实的原版端口靠对端
+     * <b>主动断开</b>（非超时）被判 NO_ZSTD，不依赖这个时限。
+     */
+    public static final int DEFAULT_READ_TIMEOUT_MS = 1500;
 
     /** 探测响应包的解压后长度上限（status JSON 带 favicon 可到几百 KB，8 MiB 足够且防恶意声明）。 */
     private static final int MAX_STATUS_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -77,8 +87,10 @@ public final class ZstdProbe {
     public enum Result {
         /** 对端回出合法的 zstd 压缩 status 响应：确认在说 ZSTD。 */
         ZSTD,
-        /** TCP 通但对端不说 ZSTD（垃圾响应 / 断开 / 限时沉默）。 */
+        /** TCP 通、且拿到确凿负面信号（对端主动断开 / 复位 / 回了非法压缩字节）：断定不说 ZSTD。 */
         NO_ZSTD,
+        /** TCP 通但限时内沉默（读超时）：无法断定，按不确定处理（维持 ZSTD，绝不据此回退）。 */
+        AMBIGUOUS,
         /** TCP 连接失败（离线 / 拒绝 / 地址错）。 */
         UNREACHABLE
     }
@@ -137,10 +149,30 @@ public final class ZstdProbe {
             LOGGER.info("zstdnet: probe {}:{} -> {}", host, port, ok ? "ZSTD" : "NO_ZSTD (invalid response)");
             return ok ? Result.ZSTD : Result.NO_ZSTD;
         } catch (Exception ex) {
-            // 已建连后的任何失败（解压垃圾 / 对端断开 / 读超时）都视为对端不说 ZSTD。
+            if (isTimeout(ex)) {
+                // 已建连但限时内没读到任何合法压缩响应：无法断定对端「不说 ZSTD」。真实 ZstdNet
+                // 服务端跨区/高延迟/GC 卡顿也会读超时；若据此回退原版直连，到 ZSTD-only 服务端会被
+                // 判 RAW_LOGIN 直接踢下线（比原来还糟）。故超时判 AMBIGUOUS，维持 ZSTD 代理路径。
+                LOGGER.info("zstdnet: probe {}:{} -> AMBIGUOUS (timed out waiting for response): {}", host, port, ex.toString());
+                return Result.AMBIGUOUS;
+            }
+            // 已建连后拿到确凿负面信号（对端断开 / 复位 / 解压垃圾）：断定对端不说 ZSTD。
             LOGGER.info("zstdnet: probe {}:{} -> NO_ZSTD: {}", host, port, ex.toString());
             return Result.NO_ZSTD;
         }
+    }
+
+    /** 异常链上是否有 socket 读超时（可能被 zstd-jni 的解压 InputStream 包过一层）。 */
+    private static boolean isTimeout(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur instanceof SocketTimeoutException) {
+                return true;
+            }
+            if (cur == cur.getCause()) {
+                break;
+            }
+        }
+        return false;
     }
 
     /** 校验解压后的首包形如原版 status 响应：包 id 0 + 合法的 JSON 字符串长度。纯函数，便于单测。 */

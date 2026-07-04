@@ -38,7 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 「对端会不会说 ZSTD」探测（raw_fallback 判据）：
- * zstd 服务端（压缩 status 往返）→ ZSTD；原版端口（原样回 status / 沉默）→ NO_ZSTD；连不上 → UNREACHABLE。
+ * zstd 服务端（压缩 status 往返）→ ZSTD；原版端口（原样回 status / 主动断开）→ NO_ZSTD；
+ * 建连后沉默（读超时）→ AMBIGUOUS（不回退）；连不上 → UNREACHABLE。
  */
 class ZstdProbeTest {
 
@@ -101,9 +102,13 @@ class ZstdProbeTest {
         }
     }
 
-    /** 模拟收下连接但一声不吭的对端（原版服把垃圾长度当作待续包）：限时沉默 → NO_ZSTD。 */
+    /**
+     * 模拟收下连接但一声不吭的对端（读超时）：判 AMBIGUOUS，绝不回退。
+     * 真实 ZstdNet 服务端跨区/高延迟/GC 卡顿也会读超时——若据此回退原版直连，到 ZSTD-only
+     * 服务端反被判 RAW_LOGIN 踢下线。故超时须维持 ZSTD 路径（调用方只在 NO_ZSTD 时才回退）。
+     */
     @Test
-    void silentServerIsNoZstd() throws Exception {
+    void silentServerIsAmbiguous() throws Exception {
         try (ServerSocket server = new ServerSocket(0)) {
             Thread serverThread = new Thread(() -> {
                 try (Socket client = server.accept()) {
@@ -114,7 +119,7 @@ class ZstdProbeTest {
             serverThread.setDaemon(true);
             serverThread.start();
 
-            assertEquals(ZstdProbe.Result.NO_ZSTD, ZstdProbe.probe("127.0.0.1", server.getLocalPort(), 1000, 500));
+            assertEquals(ZstdProbe.Result.AMBIGUOUS, ZstdProbe.probe("127.0.0.1", server.getLocalPort(), 1000, 500));
         }
     }
 
