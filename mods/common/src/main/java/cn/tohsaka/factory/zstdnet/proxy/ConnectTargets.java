@@ -1,20 +1,22 @@
 /*
- * Copyright (c) 2026 wish
+ * Copyright (c) 2026 wish (original author, MIT — https://github.com/wish131400/zstdnet)
+ * Copyright (c) 2026 xuenai · 麦块联机 / MineKuai (https://minekuai.com)
  *
  * This file is part of ZstdNet.
  *
- * ZstdNet is free software: you can redistribute it and/or modify
- * it under the terms of the MIT License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * ZstdNet is a derivative work of the MIT-licensed ZstdNet by wish. wish's
+ * original portions remain under the MIT License (see the LICENSE file); that
+ * upstream grant is preserved and not revoked.
  *
- * ZstdNet is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * MIT License for more details.
+ * This project as a whole — and all modifications and additions by xuenai — is
+ * licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+ * International License (CC BY-NC-SA 4.0). You may share and adapt it for
+ * NON-COMMERCIAL purposes only, must give appropriate credit and retain the
+ * copyright notices above, and must distribute your contributions under this
+ * same license (share-alike, source included).
  *
- * You should have received a copy of the MIT License
- * along with ZstdNet. If not, see <https://opensource.org/licenses/MIT>.
+ * You should have received a copy of the license along with ZstdNet.
+ * If not, see <https://creativecommons.org/licenses/by-nc-sa/4.0/>.
  */
 
 package cn.tohsaka.factory.zstdnet.proxy;

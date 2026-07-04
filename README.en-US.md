@@ -665,7 +665,10 @@ This project is a derivative work based on **ZstdNet** by **wish**
 ([wish131400/zstdnet](https://github.com/wish131400/zstdnet), MIT License), maintained and extended by
 **xuenai · 麦块联机 / MineKuai ([minekuai.com](https://minekuai.com))**. The original author retains their
 copyright; the copyright of the additions and modifications in this repository belongs to this project's
-maintainer. The whole remains distributed under the MIT License.
+maintainer. wish's original portions remain under the MIT License (that grant is preserved and not revoked;
+the MIT notice is kept in `NOTICE`), while **this project as a whole — and its additions/modifications — is now
+distributed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** (Attribution ·
+NonCommercial · ShareAlike).
 
 Bundled third-party component: [zstd-jni](https://github.com/luben/zstd-jni) (Luben Karavelov, BSD 2-Clause),
 which embeds [Zstandard](https://github.com/facebook/zstd) (Meta, BSD 2-Clause). See the `LICENSE` and `NOTICE`
@@ -679,7 +682,17 @@ project.
 
 ## License
 
-This project is licensed under the **MIT License**.
+This project as a whole is licensed under **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)**
+(Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International):
+
+- **Attribution (BY)** — keep the copyright notices below and give appropriate credit;
+- **NonCommercial (NC)** — **you may not use the material for commercial purposes**;
+- **ShareAlike (SA)** — remixes and modified redistributions must use the same license and **make the source available**.
+
+This is a derivative work of **wish**'s MIT-licensed [wish131400/zstdnet](https://github.com/wish131400/zstdnet):
+wish's original portions stay under MIT (grant preserved, MIT notice retained in `NOTICE`); the additions in this
+repository and the combined distribution are licensed under CC BY-NC-SA 4.0. Full terms in `LICENSE`; third-party
+notices in `NOTICE` (both shipped inside every jar).
 
 - Copyright (c) 2026 wish (original author — https://github.com/wish131400/zstdnet)
 - Copyright (c) 2026 xuenai · 麦块联机 / MineKuai (https://minekuai.com) — modifications and additions

@@ -685,7 +685,7 @@ CRC 工作在 **ZSTD 之前**：它先把能用令牌 / 增量代替的重复区
 
 本项目是基于原作者 **wish** 的开源项目 [wish131400/zstdnet](https://github.com/wish131400/zstdnet)（MIT License）
 二次开发而来，由 **xuenai · 麦块联机（[minekuai.com](https://minekuai.com)）** 维护与扩展。
-原作者保留其著作权；本仓库新增 / 修改部分的著作权归本项目维护者所有。整体仍以 MIT License 发布。
+原作者保留其著作权；本仓库新增 / 修改部分的著作权归本项目维护者所有。原作者 wish 的原始代码部分仍为 MIT License（该授权不被撤销，MIT 声明保留在 `NOTICE` 中）；**本项目整体及新增 / 修改部分改以 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 发布**（署名 · 非商业性使用 · 相同方式共享）。
 
 内置第三方组件：[zstd-jni](https://github.com/luben/zstd-jni)（Luben Karavelov，BSD 2-Clause），
 其中内含 [Zstandard](https://github.com/facebook/zstd)（Meta，BSD 2-Clause）。
@@ -697,7 +697,13 @@ CRC 工作在 **ZSTD 之前**：它先把能用令牌 / 增量代替的重复区
 
 ## License
 
-本项目采用 **MIT License**。
+本项目整体采用 **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)**（知识共享 署名-非商业性使用-相同方式共享 4.0 国际）：
+
+- **署名（BY）**：需保留下方著作权声明并注明出处；
+- **非商业性使用（NC）**：**不得用于商业用途**；
+- **相同方式共享（SA）**：二次修改后再分发须沿用同一协议，并**提供对应源码**。
+
+本项目为原作者 **wish** 的 MIT 项目 [wish131400/zstdnet](https://github.com/wish131400/zstdnet) 的衍生作品：wish 的原始代码部分仍为 MIT（该授权不被撤销），其 MIT 声明保留在 `NOTICE` 中；本仓库的新增 / 修改部分及整体发行以 CC BY-NC-SA 4.0 授权。完整条款见 `LICENSE`，第三方组件声明见 `NOTICE`（均随每个 jar 分发）。
 
 - Copyright (c) 2026 wish（原作者 — https://github.com/wish131400/zstdnet）
 - Copyright (c) 2026 xuenai · 麦块联机 / MineKuai（https://minekuai.com）— 二次开发与新增部分

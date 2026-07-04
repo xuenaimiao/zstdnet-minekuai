@@ -221,4 +221,7 @@ The mod version is in each variant's `gradle.properties` (`mod_version`).
 
 - Javadoc and inline comments are frequently written in Chinese; match the surrounding style of
   the file you are editing.
-- Source files carry an MIT license header — keep it on new files.
+- Source files carry a CC BY-NC-SA 4.0 license header (see any `.java` for the exact block) — keep it on new
+  files. The project is a derivative of wish's MIT-licensed ZstdNet; wish's original MIT grant is retained in
+  `NOTICE`, while the project as a whole is CC BY-NC-SA 4.0 (`LICENSE`). Both `LICENSE`/`NOTICE` are mirrored into
+  `mods/common/src/main/resources/` (bundled into every jar) — update both copies together.

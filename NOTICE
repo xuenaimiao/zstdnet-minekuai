@@ -1,17 +1,49 @@
 ZstdNet
 =======
 
-This software is a derivative work based on ZstdNet by wish
-(original project: https://github.com/wish131400/zstdnet), used under the
-terms of the MIT License.
+This software is a DERIVATIVE WORK based on ZstdNet by wish
+(original project: https://github.com/wish131400/zstdnet).
 
   Copyright (c) 2026 wish — original author
                             https://github.com/wish131400/zstdnet
   Copyright (c) 2026 xuenai · 麦块联机 / MineKuai — modifications and additions
                             https://minekuai.com
 
-The complete MIT License text is in the accompanying LICENSE file, which is
-also bundled inside every distributed jar.
+LICENSING
+---------
+This project as a whole, and all modifications and additions by xuenai / 麦块联机
+(MineKuai), is licensed under the Creative Commons Attribution-NonCommercial-
+ShareAlike 4.0 International License (CC BY-NC-SA 4.0). The full, binding text is
+in the accompanying LICENSE file (also bundled inside every distributed jar).
+Summary: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+wish's ORIGINAL portions remain under the MIT License; that upstream grant is
+preserved and NOT revoked. As required by the MIT License, wish's copyright and
+the full MIT permission notice are reproduced here:
+
+  --------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 wish (https://github.com/wish131400/zstdnet)
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+  --------------------------------------------------------------------------
 
 --------------------------------------------------------------------------
 Third-party components bundled in the distributed jar
