@@ -83,6 +83,31 @@ function initializeCoreMod() {
                 if (!hooked) {
                     ASMAPI.log('ERROR', '[zstdnet] premium-auth: server handleCustomQueryPacket not found.');
                 }
+
+                // (3) 重定向 tick() 内的 NetworkHooks.tickNegotiation(...) → tickNegotiationGate。
+                //     把正版换档提前到 PlayerNegotiationEvent 触发之前，避免与 LuckPerms 等「在 negotiation
+                //     阶段就按当时 UUID 预加载用户数据」的权限系统冲突（否则登录中途换 UUID → placeNewPlayer/
+                //     LoadFromFile 崩，vanilla 报「Invalid player data」）。方法名为 Forge API，运行时不混淆。
+                var redirected = false;
+                for (var p = 0; p < classNode.methods.size() && !redirected; p++) {
+                    var pm = classNode.methods.get(p);
+                    for (var q = 0; q < pm.instructions.size(); q++) {
+                        var pin = pm.instructions.get(q);
+                        if (pin.getOpcode && pin.getOpcode() == Opcodes.INVOKESTATIC
+                            && pin.name == 'tickNegotiation'
+                            && pin.owner && pin.owner.indexOf('NetworkHooks') >= 0) {
+                            pin.owner = SERVER_HOOKS;
+                            pin.name = 'tickNegotiationGate';
+                            // desc 保持不变：(ServerLoginPacketListenerImpl, Connection, ServerPlayer)Z
+                            redirected = true;
+                            ASMAPI.log('INFO', '[zstdnet] premium-auth: redirected NetworkHooks.tickNegotiation -> tickNegotiationGate (pre-negotiation premium swap).');
+                            break;
+                        }
+                    }
+                }
+                if (!redirected) {
+                    ASMAPI.log('WARN', '[zstdnet] premium-auth: NetworkHooks.tickNegotiation call not found; premium swap stays at handleAcceptedLogin (may conflict with negotiation-phase permission plugins like LuckPerms).');
+                }
                 return classNode;
             }
         },

@@ -78,7 +78,12 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
 **两套模板**（按登录流程分；`coremods/zstdnet_premium_auth.js` 各含 2 个 transformer：server + client）：
 
 - **旧版流程（Forge 1.18.2 / 1.19.2 / 1.20.1，NeoForge 1.20.1 复用）**：
-  - 服务端门控注入 `handleAcceptedLogin()`（用「**唯一构造 `ClientboundGameProfilePacket` 的 `()V` 方法**」结构特征定位，避免依赖被混淆的方法名）首部：`if (!beforeFinalizeLogin(this)) return;`。早返回时 state 仍为 `READY_TO_ACCEPT`，`tick()` 下一 tick 再次调用 → 天然轮询；原版 600-tick 慢登录超时仍生效。
+  - **negotiation 门控（主，`tickNegotiationGate`）**：把 `tick()` 内 `NetworkHooks.tickNegotiation(...)` 调用**重定向**到
+    `tickNegotiationGate`——在 `PlayerNegotiationEvent` 触发<b>之前</b>发挑战并按住 negotiation，核验换档完成后才委派原版
+    negotiation。**这样 LuckPerms 等「在 negotiation 阶段就按当时 UUID 预加载用户数据」的插件读到的即正版 UUID**，
+    否则登录中途换 UUID → `placeNewPlayer`/`LoadFromFile` 崩、vanilla 报「Invalid player data」被踢。回调原版 negotiation
+    用反射（不硬依赖 Forge `NetworkHooks`）；重定向未命中（极老版本无 `PlayerNegotiationEvent`）时降级为下面的 handleAcceptedLogin 兜底。
+  - 服务端门控注入 `handleAcceptedLogin()`（用「**唯一构造 `ClientboundGameProfilePacket` 的 `()V` 方法**」结构特征定位，避免依赖被混淆的方法名）首部：`if (!beforeFinalizeLogin(this)) return;`。作为兜底（negotiation 重定向未命中时）；早返回时 state 仍为 `READY_TO_ACCEPT`，`tick()` 下一 tick 再次调用 → 天然轮询；原版 600-tick 慢登录超时仍生效。
   - 服务端应答拦截注入 `handleCustomQueryPacket(ServerboundCustomQueryPacket)`（按描述符唯一定位）首部，识别我方事务号。
 - **现代流程（NeoForge 1.21.1 / 26.1）**：
   - 服务端门控注入 `verifyLoginAndFinishConnectionSetup(GameProfile)`（用「**唯一构造 `ClientboundLoginCompressionPacket` 的 `(GameProfile)V` 方法**」定位，区别于同描述符的 `startClientVerification`/`finishLoginAndWaitForClient`）首部。早返回时 state 仍为 `VERIFYING` → tick 轮询。
@@ -115,6 +120,13 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
 ## 5. 边界 / 注意
 
 - **玩家档案迁移**：开启后被验证玩家从离线 UUID（`OfflinePlayer:<name>`）切到正版 UUID，原有离线 `playerdata` 不会自动加载（与任何离线→在线切换同理）。建议在新服或可接受重置时启用；后续可加「按名映射」一次性迁移。
+- **与权限/登录期系统兼容（LuckPerms 等）**：这类系统会在登录 negotiation 阶段（Forge `PlayerNegotiationEvent`）按
+  当时的 UUID 预加载用户数据。正版换档已提前到该事件<b>之前</b>完成（旧版 Forge/NeoForge 走 coremod 重定向
+  `NetworkHooks.tickNegotiation` → `PremiumAuthServerHooks#tickNegotiationGate`），故它们读到的即正版 UUID，不会再出现
+  「登录中途换 UUID → `placeNewPlayer`/`LoadFromFile` 因取不到预加载数据而崩、vanilla 报『Invalid player data』被踢」
+  （典型触发：Arclight 等混合端 + LuckPerms + 外置登录 5.4.x）。现代 NeoForge（1.21.1/26.1）的 LuckPerms 在
+  configuration 阶段读档案、本就在换档之后，天然一致；Fabric 侧同理需保证换档早于
+  `ServerLoginConnectionEvents.QUERY_START` 的读取（跟进中）。
 - 依赖两端都装 ZstdNet（本就是硬要求）；原版/盗版客户端不应答查询 → 按 `premium_verification_mode` 处理（默认宽松=离线进服）。
 - `premium_session_server` 可对接外置登录；`premium_pass_real_ip` 默认关（CGNAT 等场景 IP 可能不一致）。
 - **正版身份保护（`premium_uuid_guard`，默认开）**：验证成功即把「玩家名 → 正版 UUID」登记进
