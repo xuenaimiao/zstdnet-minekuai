@@ -114,6 +114,20 @@ $targets = @(
         gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
     },
     @{
+        name = 'neoforge-26.2'
+        projectDir = Join-Path $repoRoot 'mods\26.2\zstdnet-neoforge'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-26.2-regression'
+        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
+    },
+    @{
+        name = 'fabric-26.2'
+        projectDir = Join-Path $repoRoot 'mods\26.2\zstdnet-fabric'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-26.2-regression'
+        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
+    },
+    @{
         # 插件端（版本无关，Java 17 字节码）。仅构建+单元测试；专用服/LAN 校验只针对 mod 变体，不覆盖插件。
         name = 'bukkit'
         projectDir = Join-Path $repoRoot 'mods\bukkit\zstdnet-bukkit'

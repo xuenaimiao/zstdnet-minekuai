@@ -17,13 +17,14 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is eleven parallel, independent projects
-(ten mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
+This is **not a single Gradle project**. It is fourteen parallel, independent projects
+(thirteen mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
 — there is no root settings.gradle), plus a shared **`mods/common`** source-only module that is the
 single source of truth for the loader-agnostic core:
 
 ```
 mods/common                      single-source core (compiled into every variant)
+mods/1.16.5/zstdnet-forge        Forge 1.16.5        JDK 8   (MCP mappings, FG5 + Gradle 7.6.4; see §13)
 mods/1.18.2/zstdnet-forge        Forge 1.18.2        JDK 17
 mods/1.19.3/zstdnet-fabric       Fabric 1.19.3       JDK 17  (pre-1.19.4 GUI: PoseStack render, x/y widget fields)
 mods/1.19.2/zstdnet-forge        Forge 1.19.2        JDK 17
@@ -34,12 +35,16 @@ mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1     JDK 21
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1       JDK 21
 mods/26.1/zstdnet-neoforge       NeoForge 26.1       JDK 25  (un-obfuscated; covers 26.1.x = 26.1.1/26.1.2)
 mods/26.1/zstdnet-fabric         Fabric 26.1         JDK 25  (un-obfuscated Loom; covers 26.1.x)
+mods/26.2/zstdnet-neoforge       NeoForge 26.2       JDK 25  (un-obfuscated; NeoForge 26.2.x still beta; see §14)
+mods/26.2/zstdnet-fabric         Fabric 26.2         JDK 25  (un-obfuscated Loom; see §14)
 mods/bukkit/zstdnet-bukkit       Bukkit/Spigot/Paper plugin (server-only)  JDK 17 bytecode, version-independent
 ```
 
 > **MC 26.1+ (the un-obfuscated era)** needs a different toolchain (JDK 25, Gradle 9.x, new Fabric
-> Loom, many vanilla API renames). See `ADDING_A_VARIANT.md` §10 for the full 26.1 reference. The
-> Bukkit plugin is version-independent and runs on 26.1.x servers unchanged (no rebuild needed).
+> Loom, many vanilla API renames). See `ADDING_A_VARIANT.md` §10 for the full 26.1 reference and §14
+> for the 26.1 → 26.2 deltas (26.2 reworked the client GUI: `ShareToLanScreen` → `MultiplayerOptionsScreen`,
+> `Minecraft.screen`/`Options.hideGui`/`Connection.isEncrypted()` all moved). The Bukkit plugin is
+> version-independent and runs on 26.1.x / 26.2.x servers unchanged (no rebuild needed).
 
 The **`mods/bukkit/zstdnet-bukkit`** plugin is server-side only (no mod loader). It reuses the same
 `mods/common` proxy core but, because a plugin loads *after* the MC port is bound, it cannot relocate
@@ -181,8 +186,11 @@ PowerShell build scripts at the repo root pick the right JDK and gradle invocati
 .\build-neoforge.ps1                           # NeoForge 1.21.1 (JDK 21, default)
 .\build-neoforge.ps1 -MinecraftVersion 1.20.1  # NeoForge 1.20.1 (JDK 17)
 .\build-neoforge.ps1 -MinecraftVersion 26.1    # NeoForge 26.1 (JDK 25, Gradle 9.4.1)
+.\build-neoforge.ps1 -MinecraftVersion 26.2    # NeoForge 26.2 (JDK 25, Gradle 9.4.1; 26.2.x still beta)
 .\build-fabric.ps1   -MinecraftVersion 26.1    # Fabric 26.1 (JDK 25, Gradle 9.4.1); also supports 1.20.1/1.21.1
+.\build-fabric.ps1   -MinecraftVersion 26.2    # Fabric 26.2 (JDK 25, Gradle 9.4.1)
 .\build-bukkit.ps1                             # Bukkit/Spigot/Paper plugin (JDK 17, version-independent)
+.\build-all.ps1                                # all 14 variants serially into ../zstdnet-build/dist/
 ```
 
 To build a single variant manually, set `JAVA_HOME`/`PATH` to the matching JDK and run, from

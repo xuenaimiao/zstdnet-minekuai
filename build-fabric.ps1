@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('1.19.3', '1.20.1', '1.21.1', '26.1')]
+    [ValidateSet('1.19.3', '1.20.1', '1.21.1', '26.1', '26.2')]
     [string]$MinecraftVersion = '1.21.1'
 )
 
@@ -17,6 +17,7 @@ switch ($MinecraftVersion) {
     '1.20.1' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
     '1.21.1' { $javaHome = 'C:\Program Files\Java\jdk-21'; $gradleDir = 'tools\gradle-8.8' }
     '26.1'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }
+    '26.2'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }
     default  { throw "Unsupported Fabric target: $MinecraftVersion" }
 }
 $gradleHome = Join-Path $buildRoot $gradleDir

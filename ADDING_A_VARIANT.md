@@ -507,3 +507,38 @@ dispatcher, not when connected to a remote dedicated server (a known limitation;
 **Status:** `build` green on JDK 8 (Gradle 7.6.4 + FG5) — `compileJava` + shared unit tests + `reobfJar` + dist jar
 (`zstdnet-1.16.5-forge-<ver>.jar`, embedded zstd-jni, 4 coremods, reobf-to-SRG confirmed). No-regression: Forge
 1.20.1 still builds green on JDK 17 (common's Java-8 down-level compiles unchanged there). Runtime not yet smoke-tested.
+
+## 14. Minecraft 26.2 (NeoForge + Fabric) — 26.1 → 26.2 deltas (client-GUI rework)
+
+Reference variants: `mods/26.2/zstdnet-neoforge` + `mods/26.2/zstdnet-fabric` (templates = the matching `mods/26.1/*`).
+26.2 ("Chaos Cubed", 2026's second game drop) is content-focused but shipped a **client-GUI rework** that breaks the
+thin per-variant layer. The **toolchain is identical to 26.1** (JDK 25, Gradle 9.4.1, Loom `1.16.3`, ModDevGradle
+`2.0.141`) and `mods/common` compiles unchanged — only the loader-integration layer needed edits.
+
+**Pinned versions (26.2):** `minecraft_version=26.2`; NeoForge `neo_version=26.2.0.15-beta` (the whole 26.2.x
+NeoForge line is still **beta** — `<release>` on the maven metadata is still `26.1.2.x`; ModDevGradle resolves the
+beta fine); Fabric `loader_version=0.19.3`, `fabric_api_version=0.154.2+26.2`, `loom_version=1.16.3` (1.16.3 handles
+26.2 — Loom is version-independent in the un-obfuscated era). zstd-jni `1.5.7-7` unchanged. Metadata ranges:
+`neoforge.mods.toml` minecraft `versionRange="[26.2,26.3)"`; `fabric.mod.json` `"minecraft": ">=26.2 <26.3"`;
+`javaVersion`/`java` stay `25`; mixin `compatibilityLevel "JAVA_25"`. `pack.mcmeta` `pack_format` unchanged from 26.1.
+
+**Vanilla API cheat-sheet (26.1 → 26.2)** — confirm with `javap` against the merged jar
+(`.../caches/fabric-loom/minecraftMaven/.../minecraft-merged-deobf-26.2.jar`). All four affect the thin layer only:
+
+| 26.1 | 26.2 | notes |
+|---|---|---|
+| `minecraft.screen` (field) | `minecraft.gui.screen()` | current screen moved off `Minecraft` onto `Minecraft.gui` (`net.minecraft.client.gui.Gui`); `Gui.screen()` reads it, `Minecraft.setScreenAndShow` / `Gui.setScreen` write it |
+| `minecraft.options.hideGui` (field) | `minecraft.gui.hud.isHidden()` | F1 hide-HUD state moved to `Gui.hud` (`net.minecraft.client.gui.Hud`), `public boolean isHidden()` |
+| `Connection.isEncrypted()` | *(removed)* — TAB-head gate is now `minecraft.getConnection().onlineMode()` (`ClientPacketListener#onlineMode`) | `PlayerTabOverlay#extractRenderState`'s "connection secure" gate was rewritten from `isEncrypted()` to `onlineMode()`. Retarget the redirect/coremod to `ClientPacketListener.onlineMode()Z`; the handler ORs in `LocalZstdNet.isLocalProxyEndpoint(listener.getConnection().getRemoteAddress())`. (`Connection` has no `isEncrypted`/`encrypted` flag anymore — `setEncryptionKey` just inserts Netty `CipherDecoder`/`CipherEncoder` handlers — so don't try to reconstruct `isEncrypted`.) |
+| `net.minecraft.client.gui.screens.ShareToLanScreen` | `net.minecraft.client.gui.screens.MultiplayerOptionsScreen` | the "Open to LAN" screen was **renamed** (not deleted-as-feature): same `Screen` subclass, still has `EditBox portEdit`, the `lanServer.start` button + `lanServer.port` field, and calls `IntegratedServer.publishServer`. **Drift:** it overrides `extractBackground(GuiGraphicsExtractor,int,int,float)`, **not** `extractRenderState(...)` (that stays inherited from `Screen`), so a mixin's render `@Inject` must target `extractBackground` — `init()` (widget add) is unchanged. |
+
+**Files edited (per variant; everything else copies verbatim from 26.1):**
+- **Fabric:** `client/ClientProxyPublisher` (type `ShareToLanScreen`→`MultiplayerOptionsScreen` throughout, `minecraft.screen`→`minecraft.gui.screen()`, `options.hideGui`→`gui.hud.isHidden()`); `mixin/ShareToLanScreenMixin` (`@Mixin(MultiplayerOptionsScreen.class)`, render injects `extractRenderState`→`extractBackground`, casts); `mixin/ContainerEventHandlerMixin` + `mixin/ScreenMixin` (`instanceof` type swap); `mixin/PlayerTabOverlayMixin` (`@Redirect` retarget `Connection.isEncrypted()`→`ClientPacketListener.onlineMode()`). The mixin **class/file name `ShareToLanScreenMixin` is kept** (internal label) so `zstdnet.mixins.json` needs no change.
+- **NeoForge:** `client/ClientProxyPublisher` (import + `instanceof MultiplayerOptionsScreen` + classname fallback `"multiplayeroptions"`, `options.hideGui`→`gui.hud.isHidden()`); `coremod/TabPlayerHeadHooks` (param `Connection`→`ClientPacketListener`, `onlineMode()`); `coremods/zstdnet_tab_player_head.js` (match owner `net/minecraft/client/multiplayer/ClientPacketListener` + name `onlineMode` + desc `()Z`; replacement hook descriptor `(L…/ClientPacketListener;)Z`). The other coremods (connect-intercept, lan-threshold, real-ip, premium-auth) were left as-is (their targets are core networking, not the reworked GUI).
+
+**Status:** `build` green for both variants on JDK 25 (Gradle 9.4.1) — `compileJava` + shared unit tests + dist jars
+(`zstdnet-26.2-fabric-<ver>.jar`, `zstdnet-26.2-neoforge-<ver>.jar`). No-regression: `mods/common` untouched, existing
+variants unaffected (build scripts only gained additive `26.2` cases). **Runtime not yet smoke-tested** — in particular
+the `MultiplayerOptionsScreen` mixin/coremod application and the LAN-port-field injection should be verified in-game
+(the `lanServer.start`/`lanServer.port` text-matching degrades gracefully to "no field injected" if the layout drifted;
+`/zstdport` remains the fallback for setting the port).

@@ -1,0 +1,145 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.141'
+}
+
+version = mod_version
+group = mod_group_id
+
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译
+sourceSets {
+    main {
+        java.srcDir '../../common/src/main/java'
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
+def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile
+def externalProjectBuildDir = new File(externalBuildRoot, "mods/${minecraft_version}/zstdnet-neoforge").canonicalFile
+
+layout.buildDirectory.set(externalProjectBuildDir)
+
+base {
+    archivesName = "zstdnet-${minecraft_version}-neoforge"
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+neoForge {
+    version = neo_version
+
+    runs {
+        configureEach {
+            gameDirectory = new File(externalProjectBuildDir, 'run')
+            systemProperty 'forge.logging.console.level', 'debug'
+        }
+
+        client {
+            client()
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+    all { repository ->
+        if (repository instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository && repository.url.toString().contains('maven.neoforged.net')) {
+            repository.content {
+                includeGroupByRegex 'net\\..*'
+                includeGroupByRegex 'cpw\\..*'
+            }
+        }
+    }
+}
+
+// 内嵌的 zstd-jni 以「普通资源 jar」放进最终 jar（见下方 stageEmbeddedZstd），不进模块路径、不重定位。
+// transitive=false：zstd-jni 无运行期传递依赖，只取它自身这一个 jar。
+configurations {
+    embeddedZstd { transitive = false }
+}
+
+dependencies {
+    // 编译期 + dev/test 运行期用原包名 com.github.luben.zstd（26.1 moddev 下 implementation 已在 dev run 类路径上，
+    // 门面走宿主模式）；生产 jar 不含这些类（shadowJar configurations=[] 不合并），仅内嵌资源 jar 作 fallback。
+    implementation 'com.github.luben:zstd-jni:1.5.7-7'
+    // ★ 内嵌进最终 jar 的那份原始 zstd-jni（不重定位，保留 com.github.luben.zstd，原生方法才能绑定）。
+    embeddedZstd 'com.github.luben:zstd-jni:1.5.7-7'
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    // Gradle 9 不再自动把启动器加入测试运行时类路径，需显式声明，否则 :test 报 "Failed to load JUnit Platform"。
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly 'org.slf4j:slf4j-api:2.0.9'
+}
+
+// 把原始 zstd-jni jar 暂存成资源：cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar。
+// 运行时 ZstdCodecs 在宿主无 zstd 时解压它、用隔离 URLClassLoader 加载（包名不变→原生方法可绑定，
+// 又不作为具名模块进入 JPMS 图→不与宿主 / Mohist 自带的 zstd-jni 撞名）。
+def embeddedZstdDir = layout.buildDirectory.dir('generated/embeddedZstd')
+def stageEmbeddedZstd = tasks.register('stageEmbeddedZstd', Copy) {
+    from configurations.embeddedZstd
+    into embeddedZstdDir.map { it.dir('cn/tohsaka/factory/zstdnet/embedded') }
+    rename '.*', 'zstd-jni.jar'
+}
+// 资源根是 generated/embeddedZstd（其下含 cn/.../embedded/zstd-jni.jar），故资源以该完整包路径进 jar。
+sourceSets.main.resources.srcDir(embeddedZstdDir)
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}
+
+processResources {
+    // 内嵌资源 jar 由 stageEmbeddedZstd 生成，须先于资源处理就绪。
+    dependsOn stageEmbeddedZstd
+
+    def replaceProperties = [
+        mod_id      : mod_id,
+        mod_name    : mod_name,
+        mod_version : mod_version,
+        neo_version : neo_version
+    ]
+    inputs.properties(replaceProperties)
+
+    filesMatching(['META-INF/neoforge.mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties
+    }
+}
+
+// 最终发布产物就是普通 mod jar：只含本模组自身的类 + 资源（含上面内嵌的 zstd-jni.jar 资源）。
+// 不再用 shadow——既不合并也不重定位 zstd-jni；它以普通资源内嵌、运行时由 ZstdCodecs 隔离加载，
+// 既不破坏 JNI 原生绑定，也不作为具名模块进入 JPMS 图（故不与 Mohist / 整合包自带的 zstd-jni 撞名）。
+jar {
+    archiveClassifier = ''
+    // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含 MC 版本+加载器，可区分）。
+    destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
+    manifest {
+        attributes([
+            'Specification-Title'    : mod_id,
+            'Specification-Vendor'   : 'tohsaka',
+            'Specification-Version'  : '1',
+            'Implementation-Title'   : project.name,
+            'Implementation-Version' : archiveVersion,
+            'Implementation-Vendor'  : 'tohsaka',
+            'Automatic-Module-Name'  : "${mod_group_id}.${mod_id}"
+        ])
+    }
+}

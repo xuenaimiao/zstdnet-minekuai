@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Client",
+      "presentation": {
+        "group": "Mod Development - zstdnet-neoforge",
+        "order": 0
+      },
+      "projectName": "zstdnet-neoforge",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@D:\\dev\\MCmod\\zstdnet-build\\mods\\26.1.2\\zstdnet-neoforge\\moddev\\clientRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@D:\\dev\\MCmod\\zstdnet-build\\mods\\26.1.2\\zstdnet-neoforge\\moddev\\clientRunVmArgs.txt",
+        "-Dfml.modFolders\u003dzstdnet%%D:\\dev\\MCmod\\zstdnet\\mods\\26.1\\zstdnet-neoforge\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\..\\..\\..\\..\\zstdnet-build\\mods\\26.1.2\\zstdnet-neoforge\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Server",
+      "presentation": {
+        "group": "Mod Development - zstdnet-neoforge",
+        "order": 1
+      },
+      "projectName": "zstdnet-neoforge",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@D:\\dev\\MCmod\\zstdnet-build\\mods\\26.1.2\\zstdnet-neoforge\\moddev\\serverRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@D:\\dev\\MCmod\\zstdnet-build\\mods\\26.1.2\\zstdnet-neoforge\\moddev\\serverRunVmArgs.txt",
+        "-Dfml.modFolders\u003dzstdnet%%D:\\dev\\MCmod\\zstdnet\\mods\\26.1\\zstdnet-neoforge\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\..\\..\\..\\..\\zstdnet-build\\mods\\26.1.2\\zstdnet-neoforge\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    }
+  ]
+}
