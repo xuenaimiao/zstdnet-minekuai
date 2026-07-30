@@ -1,0 +1,28 @@
+{
+  "required": true,
+  "package": "cn.tohsaka.factory.zstdnet.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "ConnectionMixin",
+    "ContainerEventHandlerMixin",
+    "ClientIntentionPacketMixin",
+    "DedicatedServerMixin",
+    "MinecraftServerMixin",
+    "ScreenMixin",
+    "ServerHandshakePacketListenerImplMixin",
+    "ServerGamePacketListenerImplAccessor",
+    "ServerLoginPacketListenerImplAccessor",
+    "PremiumAuthServerLoginMixin"
+  ],
+  "client": [
+    "ConnectScreenMixin",
+    "DirectJoinServerScreenMixin",
+    "JoinMultiplayerScreenMixin",
+    "PlayerTabOverlayMixin",
+    "ShareToLanScreenMixin",
+    "PremiumAuthClientQueryMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

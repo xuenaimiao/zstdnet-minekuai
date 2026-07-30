@@ -42,6 +42,7 @@ mods/1.19.3/zstdnet-fabric       Fabric 1.19.3     JDK 17   mixins   (pre-1.19.4
 mods/1.20.1/zstdnet-forge        Forge 1.20.1      JDK 17   coremods
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1   JDK 17   coremods, BORROWS forge's integration layer (see §7b)
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1     JDK 17   mixins
+mods/1.20.4/zstdnet-fabric       Fabric 1.20.4     JDK 17   mixins   (1.20.2 配置阶段/登录重写；见 §16)
 mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1   JDK 21   coremods, full own integration layer
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1     JDK 21   mixins
 mods/1.21.11/zstdnet-neoforge    NeoForge 1.21.11  JDK 21   coremods  (26.1-shaped API, still obfuscated; see §15)
@@ -630,3 +631,60 @@ accepts the 1-arg `handleIntention`, `verifyLoginAndFinishConnectionSetup(GamePr
 existing variants unaffected (build scripts only gained additive `1.21.11` cases). **Runtime not yet
 smoke-tested.** Note the metadata pins `[1.21.11,1.22)` — the mixin refmapping is against 1.21.11's
 intermediary, so do **not** widen the range to 1.21.9 / 1.21.10 without rebuilding against them.
+
+## 16. Minecraft 1.20.4 (Fabric) — 1.20.2 的「配置阶段 + 登录重写」
+
+Reference variant: `mods/1.20.4/zstdnet-fabric` (template = `mods/1.20.1/zstdnet-fabric`). **一个 1.20.4 构建同时覆盖
+1.20.3**：两版的 intermediary 映射逐字节相同（`diff` 过 `intermediary-1.20.3-v2.jar` 与 `-1.20.4-v2.jar` 的
+`mappings/mappings.tiny`，无差异），所以 refmap 通用，`fabric.mod.json` 因此写
+`"minecraft": ">=1.20.3 <1.20.5"`。**1.20.2 和 1.20.5+ 不在范围内**（1.20.2 映射不同；1.20.5 是组件化大改）。
+
+工具链与 1.20.1 完全一致（**JDK 17、Gradle 8.8、Loom 1.7.4**），`mods/common` 一行未改。
+`gradle.properties` → `loader_version=0.19.3`、`fabric_api_version=0.97.3+1.20.4`；`pack.mcmeta` → `"pack_format": 22`；
+`zstdnet.mixins.json` 仍是 `compatibilityLevel "JAVA_17"`；mixin 列表、`fabric.mod.json` 的入口/依赖结构均不变。
+
+> ★ 用户实测的崩溃就是拿 1.20.1 的 jar 跑 1.20.4：
+> `InvalidAccessorException: No candidates were found matching field_14127:Lnet/minecraft/class_2535; in
+> net/minecraft/class_3244`（`ServerGamePacketListenerImplAccessor` 找不到 `connection` 字段）→
+> `Mixin transformation of net.minecraft.class_3244 failed` → 主入口 `LanCompressionSync.init` 处
+> `BootstrapMethodError`（注册接收器时那个 lambda 的签名里含 `ServerGamePacketListenerImpl`，光注册就会加载该类）。
+> 根因即下表第 1 行。
+
+**只有 6 处需要改；其余全部逐字节照抄 1.20.1：**
+
+| 1.20.1 | 1.20.4 | 位置 |
+|---|---|---|
+| `@Mixin(ServerGamePacketListenerImpl.class)` + `@Accessor("connection")` | `@Mixin(ServerCommonPacketListenerImpl.class)` | `mixin/ServerGamePacketListenerImplAccessor` —— 1.20.2 加入配置阶段后，`connection` 上移到 play/configuration 共用的新父类 `ServerCommonPacketListenerImpl`（intermediary `class_8609`，字段 `field_45013`）。**类名与调用方保持不变**：子类继承父类被织入的接口，`(ServerGamePacketListenerImplAccessor) player.connection` 照样成立 |
+| `@Accessor("gameProfile")` (get/set) | `@Accessor("requestedUsername")`（取名字）+ `@Accessor("authenticatedProfile")`（换档 get/set） | `mixin/ServerLoginPacketListenerImplAccessor` —— 1.20.2 把单一 `gameProfile` 拆成两个字段 |
+| `ServerboundCustomQueryPacket` / `packet.getTransactionId()` | `ServerboundCustomQueryAnswerPacket` / `packet.transactionId()`（record） | `mixin/PremiumAuthServerLoginMixin`、`network/PremiumAuthSync`。方法名 `handleCustomQueryPacket` 不变 |
+| `new ClientboundCustomQueryPacket(id, ResourceLocation, FriendlyByteBuf)`；读侧 `packet.getIdentifier()` | `new ClientboundCustomQueryPacket(id, CustomQueryPayload)`；读侧 `packet.payload().id()` | `network/PremiumAuthSync` —— 1.20.2 给登录自定义查询套了 `CustomQueryPayload` 接口（`id()` + `write(buf)`）。发送侧新增了一个空负载 record `NonceChallengePayload`（nonce 本来就编码在信道路径 `zstdnet:auth/<hex>` 里，线格式与 Forge/NeoForge coremod 路线保持一致）；接收侧未知信道被原版解成 `DiscardedQueryPayload`、被 fabric-api 解成它自家保留字节的实现，**两者都实现 `id()`**，所以读法统一。应答包 `ServerboundCustomQueryAnswerPacket(txId, null)` 的 null 负载合法（`write` 走 `writeNullable`） |
+| `sessionService.joinServer(GameProfile, token, serverId)` | `sessionService.joinServer(user.getProfileId(), token, serverId)` | `network/PremiumAuthSync` —— 1.20.2 把 authlib 升到 6.x，首参改成 `UUID`；`User.getGameProfile()` 也一并没了（用 `getProfileId()`） |
+| `new ServerData(motd, ip, boolean isLan)` | `new ServerData(motd, ip, ServerData.Type.LAN / .OTHER)` | `client/ClientProxyPublisher` 两处（LAN 条目 → `LAN`，直连新建条目 → `OTHER`） |
+
+**登录门控的落点也随之变了**（逻辑不变，只是被 `@Redirect` 的方法换了名字）：1.20.1 的 `tick()` 里是
+`state == NEGOTIATING → acceptPlayer()`；1.20.4 是 `state == VERIFYING →
+verifyLoginAndFinishConnectionSetup(Objects.requireNonNull(authenticatedProfile))`（已用 `javap -c` 确认）。
+我方 mixin 仍注入 `tick()` **首部**并 cancel，所以照旧早于 fabric-api 在 `tick()` 内部的 `@Redirect`；
+放行前把 `authenticatedProfile` 换成正版档案，`verifyLoginAndFinishConnectionSetup` 拿到的就是正版档案。
+
+*未变 / 逐字照抄：* 其余 14 个 mixin 的目标全部原样命中（已 `javap` 逐个核对）——
+`ConnectScreen.startConnecting` 仍是 5 参（`TransferState` 是 1.20.5 才加的）、`Connection.setupCompression(int,boolean)`/
+`isEncrypted()`/`getRemoteAddress()`、`MinecraftServer.getCompressionThreshold()`、`DedicatedServer.initServer()`、
+`ServerHandshakePacketListenerImpl.handleIntention(ClientIntentionPacket)`、`ClientIntentionPacket(FriendlyByteBuf)`
+里的 `readUtf(255)`、`Screen.keyPressed(III)Z`/`removed()V`、`ContainerEventHandler.mouseClicked(DDI)Z`、
+`ShareToLanScreen.init()V` + `render(GuiGraphics,IIF)V`、`PlayerTabOverlay.render(GuiGraphics,I,Scoreboard,Objective)`、
+`ClientHandshakePacketListenerImpl.handleCustomQuery`。`ClientIntentionPacket` 虽已变成 record 且第四参换成
+`ClientIntent`，但 `ServerRealIpHooks.forwardedHostName` 本来就是反射按 `hostName`/`getHostName` 取的，无需改。
+fabric-api 的网络 API 也没动（`CustomPayload` 重构是 1.20.5）。
+
+**Build:** `.\build-fabric.ps1 -MinecraftVersion 1.20.4`（JDK 17，Gradle 8.8）。已接入 `build-all.ps1`、
+`scripts/run-regression.ps1`、`scripts/verify-runtime-startup.ps1`（公网口 25625）。
+
+**Status:** `build` 绿（`compileJava` + 共享单测 + `remapJar` → `dist/zstdnet-1.20.4-fabric-<ver>.jar`，
+含内嵌 `zstd-jni`、16 个 mixin 在 refmap 里**全部**解析成 intermediary，无一条悬空）。运行时已实测：
+`runServer` 专用服起服正常（auto-takeover 生效：公网口 25625 / 后端 25626，`network-compression-threshold`
+被强制成 1048576，`zstdnet-server.properties` 的 `listen`/`target` 均正确），`runClient` 能过原崩溃点
+（`zstdnet loaded` / `zstdnet client loaded`）直达标题界面，全程 0 条 mixin apply 失败。
+专用服上那两条 `@Mixin target … ContainerEventHandler/Screen … not found in environment type SERVER` WARN
+是预期的（客户端专属 mixin 挂在 common 段），无害。**尚未点进游戏内 GUI 实测**（多人游戏列表 / 开放局域网 /
+TAB 头像）与端到端连服压缩。

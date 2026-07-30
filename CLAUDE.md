@@ -17,8 +17,8 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is sixteen parallel, independent projects
-(fifteen mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
+This is **not a single Gradle project**. It is seventeen parallel, independent projects
+(sixteen mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
 — there is no root settings.gradle), plus a shared **`mods/common`** source-only module that is the
 single source of truth for the loader-agnostic core:
 
@@ -31,6 +31,7 @@ mods/1.19.2/zstdnet-forge        Forge 1.19.2        JDK 17
 mods/1.20.1/zstdnet-forge        Forge 1.20.1        JDK 17
 mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1     JDK 17  (reuses forge's integration layer)
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1       JDK 17
+mods/1.20.4/zstdnet-fabric       Fabric 1.20.4       JDK 17  (covers 1.20.3/1.20.4; 1.20.2 config-phase + login rewrite; see §16)
 mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1     JDK 21
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1       JDK 21
 mods/1.21.11/zstdnet-neoforge    NeoForge 1.21.11    JDK 21  (26.1-shaped client API, still obfuscated; see §15)
@@ -52,6 +53,14 @@ mods/bukkit/zstdnet-bukkit       Bukkit/Spigot/Paper plugin (server-only)  JDK 1
 > (`Identifier`, `KeyEvent`/`MouseButtonEvent`, `Permissions`, `HudElementRegistry`), but the game is
 > **still obfuscated** and still Java 21 — so its thin layer is copied from the 26.1 variants and only
 > a handful of names are reverted, while Fabric needs Loom's *classic* `fabric-loom` plugin id.
+>
+> **MC 1.20.4** (§16) shares 1.20.1's toolchain exactly (JDK 17, Gradle 8.8, Loom 1.7.4) but crosses the
+> **1.20.2 configuration-phase + login rewrite**: `connection` moved from `ServerGamePacketListenerImpl`
+> up to the new shared parent `ServerCommonPacketListenerImpl`, `ServerLoginPacketListenerImpl.gameProfile`
+> split into `requestedUsername` + `authenticatedProfile`, login custom queries gained a `CustomQueryPayload`
+> wrapper, and `ServerData`'s `boolean isLan` became `ServerData.Type`. **This is why the 1.20.1 jar hard-crashes
+> on 1.20.4** (`InvalidAccessorException` on `field_14127` → mixin apply failure at `LanCompressionSync.init`).
+> One build covers **1.20.3 + 1.20.4** (byte-identical intermediary mappings); 1.20.2 and 1.20.5+ are out of range.
 
 The **`mods/bukkit/zstdnet-bukkit`** plugin is server-side only (no mod loader). It reuses the same
 `mods/common` proxy core but, because a plugin loads *after* the MC port is bound, it cannot relocate
@@ -181,7 +190,7 @@ per-variant `mods/<ver>/<variant>/libs/`). Every variant's `build.gradle` redire
 artifact task's `destinationDirectory` there — `jarJar` (Forge 1.18.2/1.19.2/1.20.1 + NeoForge
 1.20.1), `shadowJar` (NeoForge 1.21.1/26.1 + Bukkit), or `remapJar` (Fabric). The filename already
 encodes the MC version + loader (`zstdnet-<mc>-<loader>-<mod_version>.jar`, e.g.
-`zstdnet-1.21.1-neoforge-1.4.2-m2.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`), so the ten
+`zstdnet-1.21.1-neoforge-1.4.2-m2.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`), so all
 jars coexist in one folder with no collision. The transient slim/thin/dev jars stay in each variant's
 own `libs/` (and the Forge/NeoForge/Bukkit variants delete theirs after build).
 
@@ -195,11 +204,12 @@ PowerShell build scripts at the repo root pick the right JDK and gradle invocati
 .\build-neoforge.ps1 -MinecraftVersion 1.21.11 # NeoForge 1.21.11 (JDK 21, Gradle 8.8)
 .\build-neoforge.ps1 -MinecraftVersion 26.1    # NeoForge 26.1 (JDK 25, Gradle 9.4.1)
 .\build-neoforge.ps1 -MinecraftVersion 26.2    # NeoForge 26.2 (JDK 25, Gradle 9.4.1; 26.2.x still beta)
+.\build-fabric.ps1   -MinecraftVersion 1.20.4  # Fabric 1.20.4 (JDK 17, Gradle 8.8; covers 1.20.3/1.20.4)
 .\build-fabric.ps1   -MinecraftVersion 1.21.11 # Fabric 1.21.11 (JDK 21, Gradle 9.4.1 — Loom 1.15.x)
 .\build-fabric.ps1   -MinecraftVersion 26.1    # Fabric 26.1 (JDK 25, Gradle 9.4.1); also supports 1.20.1/1.21.1
 .\build-fabric.ps1   -MinecraftVersion 26.2    # Fabric 26.2 (JDK 25, Gradle 9.4.1)
 .\build-bukkit.ps1                             # Bukkit/Spigot/Paper plugin (JDK 17, version-independent)
-.\build-all.ps1                                # all 16 variants serially into ../zstdnet-build/dist/
+.\build-all.ps1                                # all 17 variants serially into ../zstdnet-build/dist/
 ```
 
 To build a single variant manually, set `JAVA_HOME`/`PATH` to the matching JDK and run, from

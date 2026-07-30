@@ -303,6 +303,16 @@ $targets = @(
         onlineMode = $false
     },
     @{
+        name = 'fabric-1.20.4 offline'
+        projectDir = Join-Path $repoRoot 'mods\1.20.4\zstdnet-fabric'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.20.4-startup-check'
+        runDir = Join-Path $buildRoot 'mods\1.20.4\zstdnet-fabric\run'
+        publicPort = 25625
+        gradleBat = $gradleHome
+        javaHome = 'C:\Program Files\Java\jdk-17'
+        onlineMode = $false
+    },
+    @{
         name = 'fabric-1.21.1 offline'
         projectDir = Join-Path $repoRoot 'mods\1.21.1\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.21.1-startup-check'
@@ -358,6 +368,16 @@ $targets = @(
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.20.1-startup-check'
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-fabric\run'
         publicPort = 25595
+        gradleBat = $gradleHome
+        javaHome = 'C:\Program Files\Java\jdk-17'
+        onlineMode = $true
+    },
+    @{
+        name = 'fabric-1.20.4 online'
+        projectDir = Join-Path $repoRoot 'mods\1.20.4\zstdnet-fabric'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.20.4-startup-check'
+        runDir = Join-Path $buildRoot 'mods\1.20.4\zstdnet-fabric\run'
+        publicPort = 25625
         gradleBat = $gradleHome
         javaHome = 'C:\Program Files\Java\jdk-17'
         onlineMode = $true

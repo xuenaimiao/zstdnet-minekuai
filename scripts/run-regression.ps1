@@ -92,6 +92,13 @@ $targets = @(
         jarSyncTarget = Join-Path $buildRoot 'mods\1.20.1\zstdnet-fabric\libs\zstdnet-1.20.1-fabric-1.3.6-all.jar'
     },
     @{
+        # 1.20.4 变体同时覆盖 1.20.3（两者 intermediary 映射逐字节相同）；工具链同 1.20.1。
+        name = 'fabric-1.20.4'
+        projectDir = Join-Path $repoRoot 'mods\1.20.4\zstdnet-fabric'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.20.4-regression'
+        javaHome = 'C:\Program Files\Java\jdk-17'
+    },
+    @{
         name = 'fabric-1.21.1'
         projectDir = Join-Path $repoRoot 'mods\1.21.1\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.21.1-regression'

@@ -1,4 +1,4 @@
-# build-all.ps1 - Build all 16 ZstdNet variants in one pass into ../zstdnet-build/dist/
+# build-all.ps1 - Build all 17 ZstdNet variants in one pass into ../zstdnet-build/dist/
 #
 # Two things build-*.ps1 does not do:
 #   1. Uses the REAL local JDK paths (D:\JDK = JDK17, tools\jdk-21.0.11+10 = JDK21,
@@ -8,7 +8,7 @@
 #      and lists the jars produced in dist/.
 #
 # Usage:
-#   .\build-all.ps1                                 # all 16
+#   .\build-all.ps1                                 # all 17
 #   .\build-all.ps1 -Only bukkit                    # only the given key(s)
 #   .\build-all.ps1 -Only forge-1.20.1,fabric-26.1
 #   .\build-all.ps1 -DryRun                         # plan only, do not build
@@ -49,6 +49,7 @@ $variants = @(
     @{ key='forge-1.20.1';    proj='mods\1.20.1\zstdnet-forge';    jdk='17'; gradle='8.8';   cache='zstdnet-forge-1.20.1' }
     @{ key='neoforge-1.20.1'; proj='mods\1.20.1\zstdnet-neoforge'; jdk='17'; gradle='8.8';   cache='zstdnet-neoforge-1.20.1' }
     @{ key='fabric-1.20.1';   proj='mods\1.20.1\zstdnet-fabric';   jdk='17'; gradle='8.8';   cache='zstdnet-fabric-1.20.1' }
+    @{ key='fabric-1.20.4';   proj='mods\1.20.4\zstdnet-fabric';   jdk='17'; gradle='8.8';   cache='zstdnet-fabric-1.20.4' }
     @{ key='neoforge-1.21.1'; proj='mods\1.21.1\zstdnet-neoforge'; jdk='21'; gradle='8.8';   cache='zstdnet-neoforge-1.21.1' }
     @{ key='fabric-1.21.1';   proj='mods\1.21.1\zstdnet-fabric';   jdk='21'; gradle='8.8';   cache='zstdnet-fabric-1.21.1' }
     @{ key='neoforge-1.21.11'; proj='mods\1.21.11\zstdnet-neoforge'; jdk='21'; gradle='8.8';   cache='zstdnet-neoforge-1.21.11' }
