@@ -100,6 +100,20 @@ $targets = @(
         jarSyncTarget = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\libs\zstdnet-1.21.1-fabric-1.3.6-all.jar'
     },
     @{
+        name = 'neoforge-1.21.11'
+        projectDir = Join-Path $repoRoot 'mods\1.21.11\zstdnet-neoforge'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-1.21.11-regression'
+        javaHome = 'C:\Users\78569\.jdks\liberica-21.0.11'
+    },
+    @{
+        # 1.21.11 仍是混淆版本，但需新版 Loom（1.15.x，经典 fabric-loom 插件 id）→ Gradle 9.x；JDK 仍是 21。
+        name = 'fabric-1.21.11'
+        projectDir = Join-Path $repoRoot 'mods\1.21.11\zstdnet-fabric'
+        projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.21.11-regression'
+        javaHome = 'C:\Users\78569\.jdks\liberica-21.0.11'
+        gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
+    },
+    @{
         name = 'neoforge-26.1'
         projectDir = Join-Path $repoRoot 'mods\26.1\zstdnet-neoforge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-26.1-regression'

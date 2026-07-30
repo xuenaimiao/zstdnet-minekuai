@@ -11,7 +11,8 @@
     "ScreenMixin",
     "ServerHandshakePacketListenerImplMixin",
     "ServerGamePacketListenerImplAccessor",
-    "ServerLoginPacketListenerImplAccessor"
+    "ServerLoginPacketListenerImplAccessor",
+    "PremiumAuthServerLoginMixin"
   ],
   "client": [
     "ConnectScreenMixin",
@@ -19,7 +20,8 @@
     "JoinMultiplayerScreenMixin",
     "NetworkServerEntryAccessor",
     "PlayerTabOverlayMixin",
-    "ShareToLanScreenMixin"
+    "ShareToLanScreenMixin",
+    "PremiumAuthClientQueryMixin"
   ],
   "injectors": {
     "defaultRequire": 1

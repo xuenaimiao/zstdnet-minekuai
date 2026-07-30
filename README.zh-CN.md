@@ -41,8 +41,9 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
 推荐客户端和服务端都安装本模组。
 
 - 当前仓库已同步支持：
-  Forge 1.18.2、Forge 1.19.2、Forge 1.20.1、NeoForge 1.20.1、NeoForge 1.21.1、Fabric 1.20.1、Fabric 1.21.1、NeoForge 26.1、Fabric 26.1
-  （26.1 构建覆盖整个 26.1.x 线，即 26.1.1 / 26.1.2；需要 Java 25）
+  Forge 1.18.2、Forge 1.19.2、Forge 1.20.1、NeoForge 1.20.1、NeoForge 1.21.1、Fabric 1.20.1、Fabric 1.21.1、NeoForge 1.21.11、Fabric 1.21.11、NeoForge 26.1、Fabric 26.1、NeoForge 26.2、Fabric 26.2
+  （26.1 构建覆盖整个 26.1.x 线，即 26.1.1 / 26.1.2；26.2 构建覆盖 26.2.x；均需要 Java 25。NeoForge 26.2.x 目前仍为 beta）
+  （1.21.11 需要 Java 21；该构建只覆盖 1.21.11 本身，不兼容 1.21.9 / 1.21.10）
   （1.18.2 为 Forge 专属；其实体级变换收益自动退化为版本无关的去交错，详见下文「实体包流变换」）
 - **插件端（无需 mod 加载器）**：Bukkit / Spigot / Paper / Purpur，以及 Arclight / Mohist 等混合端 —— 详见下方「[插件端 / 混合端](#插件端--混合端bukkit--spigot--paper--arclight--mohist)」
 - 普通连接远程 ZstdNet 服务器时：客户端需要安装
@@ -97,9 +98,9 @@ ZstdNet 现在可以**内置**正版账号验证：在登录阶段用一条自�
 - `premium_verification_mode`：`lenient`（默认，正版玩家拿真实 UUID、其余离线进服）/ `strict`（仅允许正版）。
 - 也支持对接 authlib-injector / 自建 Yggdrasil（`premium_session_server` 支持逗号分隔多个基址，按序核验；服务端挂了 authlib-injector 时会自动探测皮肤站地址，LittleSkin / LinkSkin 等零配置可用）。
 - 正版身份保护（`premium_uuid_guard`，默认开）：曾正版进服的玩家名若本次验证不通过（如启动器会话过期），会被拒绝并提示「请重新登录启动器」，而不是静默以离线 UUID 进服导致背包/进度「丢失」。
-- 与 LuckPerms 等权限系统兼容：正版换档已提前到登录 negotiation 阶段<b>之前</b>完成，正版玩家进服不会再因 UUID 时序冲突被误踢「无效的玩家数据」（此前混合端如 Arclight + LuckPerms + 外置登录会触发）。
+- 与 LuckPerms 等权限系统兼容：正版换档已提前到权限系统读取登录 UUID <b>之前</b>完成，正版玩家进服不会再因 UUID 时序冲突被误踢「无效的玩家数据」（此前混合端如 Arclight + LuckPerms + 外置登录会触发）。**Forge / NeoForge / Fabric 各加载器均已覆盖**（Fabric 走 mixin 门控，其余走 coremod）。
 
-> **全部模组加载器已内置该功能**：Fabric、Forge、NeoForge（1.18.2 ~ 26.1，详见仓库 `PREMIUM_VERIFICATION.md`）。**Bukkit/Spigot 插件端暂不支持**（独立代理无法挂钩 MC 登录），插件端请仍把后端设 `online-mode=false`（如需保留正版身份可搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)）。ZstdNet 不会在无法验证的加载器上擅自把后端改成离线。
+> **全部模组加载器已内置该功能**：Fabric、Forge、NeoForge（1.18.2 ~ 26.2，详见仓库 `PREMIUM_VERIFICATION.md`）。**Bukkit/Spigot 插件端暂不支持**（独立代理无法挂钩 MC 登录），插件端请仍把后端设 `online-mode=false`（如需保留正版身份可搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)）。ZstdNet 不会在无法验证的加载器上擅自把后端改成离线。
 >
 > 注意：开启内置验证后，被验证玩家会用正版 UUID，原离线 `playerdata` 不会自动迁移（与任何离线→在线切换相同）。
 

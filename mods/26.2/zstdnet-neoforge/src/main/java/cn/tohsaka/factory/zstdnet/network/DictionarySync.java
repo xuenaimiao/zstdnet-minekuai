@@ -73,6 +73,11 @@ public final class DictionarySync {
 
     /** 服务端：玩家进服后，若配置了字典则告知其 dict id。 */
     public static void announce(ServerPlayer player) {
+        // 客户端没装 zstdnet（或版本过旧）时该通道没协商上，NeoForge 会在 send 时抛
+        // UnsupportedOperationException 打断登录流程；这里静默跳过——顺带省掉没必要的字典磁盘读。
+        if (!player.connection.hasChannel(DictSyncMessage.TYPE)) {
+            return;
+        }
         byte[] dictionary = ServerProxyConfigFile.loadDictionaryBytes();
         if (dictionary == null) {
             return;
@@ -154,7 +159,8 @@ public final class DictionarySync {
                 byte[] dictionary = ServerProxyConfigFile.loadDictionaryBytes();
                 if (dictionary != null
                     && Zstd.getDictIdFromDict(dictionary) == message.dictId()
-                    && context.player() instanceof ServerPlayer player) {
+                    && context.player() instanceof ServerPlayer player
+                    && player.connection.hasChannel(DictSyncMessage.TYPE)) {
                     PacketDistributor.sendToPlayer(player, new DictSyncMessage(message.dictId(), dictionary));
                 }
             });

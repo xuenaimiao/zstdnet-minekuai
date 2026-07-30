@@ -40,8 +40,9 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
 It is recommended to install this mod on both the client and the server.
 
 - Current versions supported in this repository:
-  Forge 1.19.2, Forge 1.20.1, NeoForge 1.20.1, NeoForge 1.21.1, Fabric 1.20.1, Fabric 1.21.1, NeoForge 26.1, Fabric 26.1
-  (the 26.1 builds cover the whole 26.1.x line, i.e. 26.1.1 / 26.1.2; they require Java 25)
+  Forge 1.19.2, Forge 1.20.1, NeoForge 1.20.1, NeoForge 1.21.1, Fabric 1.20.1, Fabric 1.21.1, NeoForge 1.21.11, Fabric 1.21.11, NeoForge 26.1, Fabric 26.1, NeoForge 26.2, Fabric 26.2
+  (the 26.1 builds cover the whole 26.1.x line, i.e. 26.1.1 / 26.1.2, and the 26.2 builds cover 26.2.x; both require Java 25; NeoForge 26.2.x is still beta)
+  (1.21.11 requires Java 21; that build targets 1.21.11 only — it is not compatible with 1.21.9 / 1.21.10)
 - **Plugin servers (no mod loader)**: Bukkit / Spigot / Paper / Purpur, plus hybrid servers like Arclight / Mohist — see "[Plugin & Hybrid Servers](#plugin--hybrid-servers-bukkit--spigot--paper--arclight--mohist)" below
 - When connecting to a remote ZstdNet-enabled server: the client needs it
 - When using the built-in Zstd server entry: the server needs it
@@ -95,9 +96,9 @@ ZstdNet can now verify premium accounts **itself**: during login it uses a custo
 - `premium_verification_mode`: `lenient` (default — premium players get their real UUID, others fall back to an offline UUID) or `strict` (premium-only).
 - authlib-injector / self-hosted Yggdrasil is supported via `premium_session_server` (accepts a comma-separated list of base URLs, tried in order; when the server JVM runs authlib-injector, the skin-station address is auto-detected — LittleSkin / LinkSkin work with zero config).
 - Premium identity guard (`premium_uuid_guard`, on by default): a name that previously joined as a verified premium account is rejected with a clear "please re-login in your launcher" message when its session fails to verify, instead of silently falling back to an offline UUID (which would look like a wiped inventory).
-- Compatible with permission systems like LuckPerms: the premium profile swap now completes *before* the login negotiation phase, so premium players are no longer wrongly kicked with "Invalid player data" due to a UUID-timing race (previously triggered on hybrid servers such as Arclight + LuckPerms + an external login).
+- Compatible with permission systems like LuckPerms: the premium profile swap now completes *before* the permission system reads the login UUID, so premium players are no longer wrongly kicked with "Invalid player data" due to a UUID-timing race (previously triggered on hybrid servers such as Arclight + LuckPerms + an external login). **Covered on every loader — Forge / NeoForge / Fabric** (Fabric via a mixin gate, the rest via coremods).
 
-> **The built-in feature now ships in every mod loader**: Fabric, Forge, and NeoForge (1.18.2 ~ 26.1; see `PREMIUM_VERIFICATION.md`). **The Bukkit/Spigot plugin does not support it** (a standalone proxy cannot hook MC login) — on the plugin keep the backend on `online-mode=false` (optionally pairing [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) to preserve premium identity). ZstdNet will not silently switch the backend to offline on a loader that cannot verify.
+> **The built-in feature now ships in every mod loader**: Fabric, Forge, and NeoForge (1.18.2 ~ 26.2; see `PREMIUM_VERIFICATION.md`). **The Bukkit/Spigot plugin does not support it** (a standalone proxy cannot hook MC login) — on the plugin keep the backend on `online-mode=false` (optionally pairing [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) to preserve premium identity). ZstdNet will not silently switch the backend to offline on a loader that cannot verify.
 >
 > Note: once built-in verification is on, verified players use their premium UUID, and existing offline `playerdata` is not migrated automatically (same as any offline→online switch).
 

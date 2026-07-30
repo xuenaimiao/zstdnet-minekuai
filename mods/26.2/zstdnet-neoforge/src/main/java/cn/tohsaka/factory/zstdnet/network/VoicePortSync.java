@@ -73,6 +73,11 @@ public final class VoicePortSync {
         if (plan == null) {
             return;
         }
+        // 客户端没装 zstdnet（或版本过旧）时该通道没协商上，NeoForge 会在 send 时抛
+        // UnsupportedOperationException 打断登录流程；这里静默跳过——原版客户端走 RAW 直通是受支持场景。
+        if (!player.connection.hasChannel(VoicePortListMessage.TYPE)) {
+            return;
+        }
         PacketDistributor.sendToPlayer(player, new VoicePortListMessage(plan.transport(), plan.ports()));
     }
 

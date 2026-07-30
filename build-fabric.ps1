@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('1.19.3', '1.20.1', '1.21.1', '26.1', '26.2')]
+    [ValidateSet('1.19.3', '1.20.1', '1.21.1', '1.21.11', '26.1', '26.2')]
     [string]$MinecraftVersion = '1.21.1'
 )
 
@@ -16,6 +16,8 @@ switch ($MinecraftVersion) {
     '1.19.3' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
     '1.20.1' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
     '1.21.1' { $javaHome = 'C:\Program Files\Java\jdk-21'; $gradleDir = 'tools\gradle-8.8' }
+    # 1.21.11 仍是混淆版本，但需要新版 Loom（1.15.x，经典 fabric-loom 插件 id）+ Gradle 9.x；JDK 仍是 21。
+    '1.21.11' { $javaHome = 'C:\Users\78569\.jdks\liberica-21.0.11'; $gradleDir = 'tools\gradle-9.4.1' }
     '26.1'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }
     '26.2'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }
     default  { throw "Unsupported Fabric target: $MinecraftVersion" }

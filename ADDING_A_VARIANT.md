@@ -44,6 +44,12 @@ mods/1.20.1/zstdnet-neoforge     NeoForge 1.20.1   JDK 17   coremods, BORROWS fo
 mods/1.20.1/zstdnet-fabric       Fabric 1.20.1     JDK 17   mixins
 mods/1.21.1/zstdnet-neoforge     NeoForge 1.21.1   JDK 21   coremods, full own integration layer
 mods/1.21.1/zstdnet-fabric       Fabric 1.21.1     JDK 21   mixins
+mods/1.21.11/zstdnet-neoforge    NeoForge 1.21.11  JDK 21   coremods  (26.1-shaped API, still obfuscated; see §15)
+mods/1.21.11/zstdnet-fabric      Fabric 1.21.11    JDK 21   mixins    (classic `fabric-loom` id + Loom 1.15.x; see §15)
+mods/26.1/zstdnet-neoforge       NeoForge 26.1     JDK 25   coremods  (un-obfuscated; see §10)
+mods/26.1/zstdnet-fabric         Fabric 26.1       JDK 25   mixins    (un-obfuscated; see §10)
+mods/26.2/zstdnet-neoforge       NeoForge 26.2     JDK 25   coremods  (see §14)
+mods/26.2/zstdnet-fabric         Fabric 26.2       JDK 25   mixins    (see §14)
 ```
 
 ---
@@ -542,3 +548,85 @@ variants unaffected (build scripts only gained additive `26.2` cases). **Runtime
 the `MultiplayerOptionsScreen` mixin/coremod application and the LAN-port-field injection should be verified in-game
 (the `lanServer.start`/`lanServer.port` text-matching degrades gracefully to "no field injected" if the layout drifted;
 `/zstdport` remains the fallback for setting the port).
+
+## 15. Minecraft 1.21.11 (NeoForge + Fabric) — 26.1-shaped API on a still-obfuscated game
+
+Reference variants: `mods/1.21.11/zstdnet-neoforge` + `mods/1.21.11/zstdnet-fabric`. **Template = the matching
+`mods/26.1/*` variant, not `mods/1.21.1/*`** — this is the counter-intuitive part and the single most
+important decision for this variant.
+
+**Why 26.1 is the right template.** 1.21.11 (2025-12-09, protocol 774, `java_version` 21) already carries the
+whole 1.21.9 client rework *and* most of the "un-obfuscation era" renames that §10 lists as 26.1 deltas:
+`ResourceLocation` → **`Identifier`**, `keyPressed(int,int,int)` → **`keyPressed(KeyEvent)`**,
+`mouseClicked(DDI)` → **`mouseClicked(MouseButtonEvent, boolean)`**, `Player.hasPermissions(int)` →
+**`permissions().hasPermission(Permissions.…)`**, `NetworkServerEntry.getServerData()` → protected
+**`serverData`** field (needs the `NetworkServerEntryAccessor` mixin), and on the Fabric API side
+`HudRenderCallback` → **`HudElementRegistry.addLast(Identifier, …)`**. Copying from 1.21.1 would mean
+re-deriving all of that; copying from 26.1 leaves **six** reversions (below).
+
+**But the game is still obfuscated**, and it is still **Java 21** (26.1 is Java 25). So the toolchain is a
+hybrid: JDK 21 + mappings, with a Loom new enough to set 1.21.11 up.
+
+**Pinned versions:** `minecraft_version=1.21.11`; NeoForge `neo_version=21.11.44` (a real release, not beta),
+ModDevGradle `2.0.141`, **Gradle 8.8**; Fabric `loader_version=0.19.3`, `fabric_api_version=0.141.5+1.21.11`,
+`loom_version=1.15.5`, **Gradle 9.4.1** (Loom 1.15.x needs it). zstd-jni `1.5.7-7` unchanged. Metadata:
+`neoforge.mods.toml` minecraft `versionRange="[1.21.11,1.22)"` + `javaVersion="[21,)"`; `fabric.mod.json`
+`"minecraft": ">=1.21.11 <1.22"` + `"java": ">=21"`; mixin `compatibilityLevel "JAVA_21"`.
+
+**★ Fabric Loom trap — the classic vs no-remap plugin id.** Loom ≥1.15 publishes *two* plugin ids:
+
+| plugin id | impl class | use |
+|---|---|---|
+| `net.fabricmc.fabric-loom` | `LoomNoRemapGradlePlugin` | **26.x only** — forces `disableObfuscation=true` |
+| `fabric-loom` | `LoomGradlePlugin` | the classic remapping plugin — **what 1.21.11 needs** |
+
+The 26.1 template uses the first one, so a copied 1.21.11 project fails at configuration with
+`Cannot use Mojang mappings in a non-obfuscated environment` — and if you "fix" that by dropping
+`mappings`, Loom happily produces a *non*-deobfuscated "deobf" jar and then dies on
+`Expected official namespace for access widener entry, found: intermediary in mod: fabric-biome-api-v1`.
+The fix is `plugins { id 'fabric-loom' version "${loom_version}" }` plus the classic dependency block
+(`mappings loom.officialMojangMappings()`, `modImplementation` for loader + fabric-api). Loom 1.15.5 then
+remaps the mixin annotations **in place** to intermediary (`method_25394`, `field_45013`, …) — the built jar
+carries **no refmap file**, and that is correct, not a bug. Verify with
+`javap -v -p cn/tohsaka/factory/zstdnet/mixin/*.class | grep method=` on the dist jar: every `method=`/
+`@Accessor` value must be an intermediary name; anything left as a plain vanilla name means that target
+did not resolve.
+
+**The six reversions from the 26.1 template** (everything else copies verbatim, both loaders):
+
+| 26.1 | 1.21.11 | where |
+|---|---|---|
+| `GuiGraphicsExtractor` | `GuiGraphics` | `client/ClientProxyPublisher` (both loaders), `mixin/ShareToLanScreenMixin` |
+| `gui.text(font, …)` | `gui.drawString(font, …)` | `client/ClientProxyPublisher` (both loaders) |
+| `extractRenderState(GuiGraphicsExtractor,IIF)V` | `render(Lnet/minecraft/client/gui/GuiGraphics;IIF)V` | `mixin/ShareToLanScreenMixin` — 1.21.11 has no render-state split |
+| `@Redirect(method = "extractRenderState")` | `@Redirect(method = "render")` | `mixin/PlayerTabOverlayMixin` (`Connection.isEncrypted()Z` still exists, so the redirect target itself is unchanged) |
+| `ClientCommands.literal/argument` | `ClientCommandManager.literal/argument` | `client/ClientProxyPublisher` (Fabric) |
+| `PayloadTypeRegistry.clientboundPlay()/serverboundPlay()` | `playS2C()/playC2S()` | `network/{DictionarySync,LanCompressionSync,VoicePortSync}` (Fabric) |
+
+Plus one that is neither 26.1 nor 1.21.1 flavoured: **`LocalPlayer` has no `sendSystemMessage(Component)`** in
+1.21.11 (it is a `CommandSource` method, and the *client* player does not implement it) → use
+`minecraft.player.displayClientMessage(message, false)`. `ServerPlayer.sendSystemMessage` is unaffected, so
+`server/ServerProxyBootstrap` needs no change.
+
+**Unchanged / verbatim from 26.1:** all server/network/auth files; every other mixin
+(`ConnectScreenMixin` — `startConnecting` is still the 6-arg `(Screen,Minecraft,ServerAddress,ServerData,Z,TransferState)V`,
+`ConnectionMixin`, `ClientIntentionPacketMixin`, `DedicatedServerMixin`, `MinecraftServerMixin`,
+`ServerHandshakePacketListenerImplMixin` — `handleIntention` is the 1-arg form, the three accessors,
+`ScreenMixin`/`ContainerEventHandlerMixin`/`JoinMultiplayerScreenMixin`/`DirectJoinServerScreenMixin` with the
+new `KeyEvent`/`MouseButtonEvent` signatures, both `PremiumAuth*` mixins); and **all five NeoForge coremods
+byte-for-byte** — verified against the 1.21.11 jar: `ConnectScreen#startConnecting` exact descriptor matches,
+`MinecraftServer#getCompressionThreshold()I` / `DedicatedServer#initServer()Z` match, the real-IP coremod already
+accepts the 1-arg `handleIntention`, `verifyLoginAndFinishConnectionSetup(GameProfile)V` still contains the
+`NEW ClientboundLoginCompressionPacket` the premium-auth coremod keys on, and the TAB-head coremod locates
+`Connection.isEncrypted()Z` by owner+descriptor.
+
+**Build:** `.\build-neoforge.ps1 -MinecraftVersion 1.21.11` (JDK 21, Gradle 8.8) /
+`.\build-fabric.ps1 -MinecraftVersion 1.21.11` (JDK 21, **Gradle 9.4.1**). Both are wired into
+`build-all.ps1` and `scripts/run-regression.ps1`.
+
+**Status:** `build` green for both variants — `compileJava` + shared unit tests + dist jars
+(`zstdnet-1.21.11-neoforge-<ver>.jar` with the 5 coremods + embedded `zstd-jni.jar`,
+`zstdnet-1.21.11-fabric-<ver>.jar` with all 17 mixins remapped to intermediary). `mods/common` untouched;
+existing variants unaffected (build scripts only gained additive `1.21.11` cases). **Runtime not yet
+smoke-tested.** Note the metadata pins `[1.21.11,1.22)` — the mixin refmapping is against 1.21.11's
+intermediary, so do **not** widen the range to 1.21.9 / 1.21.10 without rebuilding against them.

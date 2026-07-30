@@ -1,4 +1,4 @@
-# build-all.ps1 - Build all 14 ZstdNet variants in one pass into ../zstdnet-build/dist/
+# build-all.ps1 - Build all 16 ZstdNet variants in one pass into ../zstdnet-build/dist/
 #
 # Two things build-*.ps1 does not do:
 #   1. Uses the REAL local JDK paths (D:\JDK = JDK17, tools\jdk-21.0.11+10 = JDK21,
@@ -8,7 +8,7 @@
 #      and lists the jars produced in dist/.
 #
 # Usage:
-#   .\build-all.ps1                                 # all 12
+#   .\build-all.ps1                                 # all 16
 #   .\build-all.ps1 -Only bukkit                    # only the given key(s)
 #   .\build-all.ps1 -Only forge-1.20.1,fabric-26.1
 #   .\build-all.ps1 -DryRun                         # plan only, do not build
@@ -51,6 +51,9 @@ $variants = @(
     @{ key='fabric-1.20.1';   proj='mods\1.20.1\zstdnet-fabric';   jdk='17'; gradle='8.8';   cache='zstdnet-fabric-1.20.1' }
     @{ key='neoforge-1.21.1'; proj='mods\1.21.1\zstdnet-neoforge'; jdk='21'; gradle='8.8';   cache='zstdnet-neoforge-1.21.1' }
     @{ key='fabric-1.21.1';   proj='mods\1.21.1\zstdnet-fabric';   jdk='21'; gradle='8.8';   cache='zstdnet-fabric-1.21.1' }
+    @{ key='neoforge-1.21.11'; proj='mods\1.21.11\zstdnet-neoforge'; jdk='21'; gradle='8.8';   cache='zstdnet-neoforge-1.21.11' }
+    # 1.21.11 Fabric 仍是混淆版本，但要新版 Loom（1.15.x）→ Gradle 9.x，JDK 仍是 21
+    @{ key='fabric-1.21.11';  proj='mods\1.21.11\zstdnet-fabric';  jdk='21'; gradle='9.4.1'; cache='zstdnet-fabric-1.21.11' }
     @{ key='neoforge-26.1';   proj='mods\26.1\zstdnet-neoforge';   jdk='25'; gradle='9.4.1'; cache='zstdnet-neoforge-26.1' }
     @{ key='fabric-26.1';     proj='mods\26.1\zstdnet-fabric';     jdk='25'; gradle='9.4.1'; cache='zstdnet-fabric-26.1' }
     @{ key='neoforge-26.2';   proj='mods\26.2\zstdnet-neoforge';   jdk='25'; gradle='9.4.1'; cache='zstdnet-neoforge-26.2' }

@@ -66,6 +66,11 @@ public final class LanCompressionSync {
     }
 
     public static void requestCompressionUpgrade(ServerPlayer player) {
+        // 客户端没装 zstdnet（或版本过旧）时该通道没协商上，NeoForge 会在 send 时抛
+        // UnsupportedOperationException 打断登录流程；这里静默跳过——原版客户端走 RAW 直通是受支持场景。
+        if (!player.connection.hasChannel(PrepareMessage.TYPE)) {
+            return;
+        }
         PacketDistributor.sendToPlayer(player, new PrepareMessage(LAN_THRESHOLD));
         LOGGER.info(
             "[zstdnet-server] requested LAN compression threshold {} for {}.",
@@ -76,6 +81,10 @@ public final class LanCompressionSync {
 
     public static void sendServerHudSnapshot(ServerPlayer player, ServerProxyBootstrap.ServerHudSnapshot snapshot) {
         if (snapshot == null) {
+            return;
+        }
+        // 同上：HUD 快照每秒对全体在线玩家下发一次，没装 mod 的玩家在这里会每秒抛一次异常。
+        if (!player.connection.hasChannel(ServerHudMessage.TYPE)) {
             return;
         }
         PacketDistributor.sendToPlayer(player, ServerHudMessage.from(snapshot));
@@ -131,6 +140,10 @@ public final class LanCompressionSync {
                 }
 
                 player.connection.getConnection().setupCompression(message.threshold, true);
+                // activate 与 ready 是两个独立通道 id，不能由后者推断前者已协商。
+                if (!player.connection.hasChannel(ActivateMessage.TYPE)) {
+                    return;
+                }
                 PacketDistributor.sendToPlayer(player, new ActivateMessage(message.threshold));
                 LOGGER.info(
                     "[zstdnet-server] LAN compression threshold {} activated for {}.",

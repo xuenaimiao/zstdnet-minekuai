@@ -2,10 +2,10 @@
 
 ZstdNet 现在可以**内置**「正版账号验证」，让正版玩家在离线后端上保留真实 UUID / 皮肤，**无需再额外安装 TrueUUID 等 mod**。
 
-> **当前进度**：核心 + 自动检测 + **全部 9 个模组变体已实现并通过构建验证**——
-> Fabric（1.20.1 / 1.21.1 / 26.1，走 fabric-api 登录网络）与 **Forge / NeoForge（1.18.2 / 1.19.2 / 1.20.1
+> **当前进度**：核心 + 自动检测 + **全部 10 个模组变体已实现并通过构建验证**——
+> Fabric（1.19.3 / 1.20.1 / 1.21.1 / 26.1，走 **mixin 拦截 vanilla 登录**）与 **Forge / NeoForge（1.18.2 / 1.19.2 / 1.20.1
 > Forge + 1.20.1 / 1.21.1 / 26.1 NeoForge，走 coremod ASM）**。**Bukkit 插件端仍不支持**（独立代理无法挂钩 MC 登录）。
-> 所有变体目前均为**构建验证**（编译 + 单测 + 全量打包），运行正确性仍待真实环境实测。
+> Forge 1.20.1 的「与 LuckPerms 冲突踢『无效的玩家数据』」已实测修复；其余变体的运行正确性仍待真实环境实测。
 
 ---
 
@@ -49,14 +49,17 @@ ZSTD 只能压缩明文。原版 online-mode 的加密握手（`EncryptionReques
 | 变体 | 登录挂钩 | 机制 | 构建验证 | 运行验证 |
 |---|---|---|---|---|
 | 共享核心 `mods/common`（协议/验证器/MiniJson/配置/A0/状态） | — | — | ✅ 全工具链编译 + 单测通过 | — |
-| Fabric 1.20.1 | ✅ | Mixin + fabric-api 登录网络 | ✅ `build` 通过 | ⏳ 待实测 |
-| Fabric 1.21.1 | ✅ | 同上 | ✅ `build` 通过 | ⏳ 待实测 |
-| Fabric 26.1 | ✅ | 同上 | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 1.19.3 | ✅ | Mixin（`tick()` 门控 + 应答/查询拦截，旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 1.20.1 | ✅ | Mixin（同上，旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 1.21.1 | ✅ | Mixin（同上，现代流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 1.21.11 | ✅ | Mixin（同上，现代流程；薄层以 26.1 为模板回退命名） | ✅ `build` 通过 | ⏳ 待实测 |
+| Fabric 26.1 | ✅ | Mixin（同上，现代流程/非混淆） | ✅ `build` 通过 | ⏳ 待实测 |
 | Forge 1.18.2 | ✅ | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
 | Forge 1.19.2 | ✅ | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
 | Forge 1.20.1 | ✅ | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
 | NeoForge 1.20.1 | ✅（复用 forge-1.20.1 的 java/资源/Platform） | coremod ASM（旧版流程） | ✅ `build` 通过 | ⏳ 待实测 |
 | NeoForge 1.21.1 | ✅ | coremod ASM（现代流程） | ✅ `build` 通过 | ⏳ 待实测 |
+| NeoForge 1.21.11 | ✅ | coremod ASM（现代流程；coremod 与 26.1 逐字节相同） | ✅ `build` 通过 | ⏳ 待实测 |
 | NeoForge 26.1 | ✅ | coremod ASM（现代流程） | ✅ `build` 通过 | ⏳ 待实测 |
 
 > 所有变体目前都只是**构建验证**（编译 + 单测 + 全量打包，含 Forge `reobf` 与 NeoForge `shadow`，且确认 jar 内打入了
@@ -65,7 +68,7 @@ ZSTD 只能压缩明文。原版 online-mode 的加密握手（`EncryptionReques
 
 ### 已落地的文件
 - 共享：`mods/common/.../auth/PremiumAuthProtocol.java`（含 coremod 路线的 `channelPathWithServerId`/`serverIdFromChannelPath`/`COREMOD_TRANSACTION_ID`）、`MojangPremiumVerifier.java`、`MiniJson.java`（零依赖 JSON）、`PremiumAuthState.java`；`server/ServerProxyConfigFile.java`（新键+模板）、`server/DedicatedServerAutoPort.java`（A0 自动检测）；`platform/Platform.java`（新增 `supportsPremiumVerification()`，默认 false）。
-- Fabric ×3：`mixin/ServerLoginPacketListenerImplAccessor.java`、`network/PremiumAuthSync.java`、`platform/FabricPlatform.java`(override→true)，并登记进 `zstdnet.mixins.json`、接线进 `Zstdnet`/`ZstdnetClient`。
+- Fabric ×4（1.19.3 / 1.20.1 / 1.21.1 / 26.1）：`network/PremiumAuthSync.java`（改为 **mixin 驱动**的钩子逻辑：`gateProceed` / `serverHandleAnswer` / `clientHandleQuery`，不再注册 fabric-api 登录事件）、服务端 `mixin/PremiumAuthServerLoginMixin.java`（`tick()` 门控 + `handleCustomQueryPacket` 应答拦截，`priority=1500`）、客户端 `mixin/PremiumAuthClientQueryMixin.java`（`ClientHandshakePacketListenerImpl#handleCustomQuery` 拦截）、`mixin/ServerLoginPacketListenerImplAccessor.java`、`platform/FabricPlatform.java`(override→true)，两个新 mixin 登记进 `zstdnet.mixins.json`（server 入 `mixins`、client 入 `client`）。`Zstdnet`/`ZstdnetClient` 仍调 `PremiumAuthSync.init()/initClient()`（现为空实现）。
 - Forge/NeoForge ×（5 套源码，nf1201 复用 forge1201）：`coremod/PremiumAuthServerHooks.java`、`coremod/PremiumAuthClientHooks.java`、`resources/coremods/zstdnet_premium_auth.js`（登记进 `META-INF/coremods.json`）、`platform/*Platform.java`(override→true)。**coremod 是声明式的，无需在 `Zstdnet`/`ServerProxyBootstrap` 接线**。
 - 单测：`mods/common/src/test/java/.../auth/`（协议/验证器/状态/MiniJson）。
 
@@ -117,6 +120,21 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
 
 ---
 
+## 4b. Fabric 实现说明（mixin 门控）
+
+Fabric 无 Forge 那套 coremod ASM API，改用 **mixin**；但换档**时序思路与 Forge negotiation-gate 完全一致**——都在权限系统读 UUID 之<b>前</b>完成换档。
+
+**为什么弃用 fabric-api 的 `ServerLoginConnectionEvents.QUERY_START`/receiver**：fabric-api 恰在 `QUERY_START` 才发登录查询，而 LuckPerms 在 `QUERY_START` 回调里**同步**读取当时的登录 UUID 预加载用户数据 → 换档（需一次客户端往返，异步）必然晚于这次同步读取 → LuckPerms 按**离线** UUID 预加载、玩家却以正版 UUID 进服，`ServerPlayConnectionEvents.JOIN` 处 `getIfLoaded(正版)` 取不到而**干净断开**（`LOADING_STATE_ERROR`）。这是「登录中途换 UUID」在 Fabric 侧的等价症状（Forge 侧则是 vanilla `placeNewPlayer`/`LoadFromFile` 崩、报「Invalid player data」）。事件注册顺序/相位都救不了——必须让换档发生在 `QUERY_START` 触发之前。
+
+**三处 mixin 注入**（全部官方 Mojang 映射，方法名跨 1.19.3/1.20.1/1.21.1/26.1 稳定；逻辑集中在 `network/PremiumAuthSync`）：
+- 服务端 `tick()` HEAD（`cancellable`）→ `gateProceed`：首个 tick 发 nonce 查询并 `cancel()` 按住——`tick()` 永不推进到 fabric-api 触发 `QUERY_START` 的 `@Redirect` 调用点（旧版 `acceptPlayer` / 现代 `tickVerify`），核验换档完成后才放行；此后 `QUERY_START` 才触发，LuckPerms 读到的即正版 UUID。因 `cancel()` 会一并跳过原版 600-tick 慢登录超时，`gateProceed` 自带等值门控超时。
+- 服务端 `handleCustomQueryPacket(...)` HEAD（`cancellable`，mixin `priority=1500` 高于 fabric-networking-api 默认 1000）→ `serverHandleAnswer`：识别我方固定事务号、后台 `hasJoined` 核验换档；抢在 fabric-api 的 `onQueryResponse` 之前消费，避免其对未知事务号打 warn。
+- 客户端 `ClientHandshakePacketListenerImpl#handleCustomQuery` HEAD → `clientHandleQuery`：本机 `joinServer` 后回一条空应答。
+
+**符号差异**同 §4 的版本表（旧版 `ServerboundCustomQueryPacket` / 现代 `ServerboundCustomQueryAnswerPacket`；`gameProfile`/`authenticatedProfile`；authlib `joinServer`/`GameProfile` 版本；`ResourceLocation`/`Identifier`）。协议与 coremod 路线**逐字节一致**（nonce 走信道路径 `zstdnet:auth/<hex>`、固定 `COREMOD_TRANSACTION_ID`），两条路线可互通。premium 为 opt-in：未开启时 `gateProceed` 首行即返回 `true`（永不 `cancel`）→ 对普通登录**零影响**。
+
+---
+
 ## 5. 边界 / 注意
 
 - **玩家档案迁移**：开启后被验证玩家从离线 UUID（`OfflinePlayer:<name>`）切到正版 UUID，原有离线 `playerdata` 不会自动加载（与任何离线→在线切换同理）。建议在新服或可接受重置时启用；后续可加「按名映射」一次性迁移。
@@ -124,9 +142,10 @@ Forge/NeoForge 没有 Fabric 那套登录网络 API；且 **NeoForge 1.20.2+（1
   当时的 UUID 预加载用户数据。正版换档已提前到该事件<b>之前</b>完成（旧版 Forge/NeoForge 走 coremod 重定向
   `NetworkHooks.tickNegotiation` → `PremiumAuthServerHooks#tickNegotiationGate`），故它们读到的即正版 UUID，不会再出现
   「登录中途换 UUID → `placeNewPlayer`/`LoadFromFile` 因取不到预加载数据而崩、vanilla 报『Invalid player data』被踢」
-  （典型触发：Arclight 等混合端 + LuckPerms + 外置登录 5.4.x）。现代 NeoForge（1.21.1/26.1）的 LuckPerms 在
-  configuration 阶段读档案、本就在换档之后，天然一致；Fabric 侧同理需保证换档早于
-  `ServerLoginConnectionEvents.QUERY_START` 的读取（跟进中）。
+  （典型触发：Arclight 等混合端 + LuckPerms + 外置登录 5.4.x）。**Forge 1.20.1 已实测修复**。现代 NeoForge
+  （1.21.1/26.1）的 LuckPerms 在 configuration 阶段读档案、本就在换档之后，天然一致（无需改）。**Fabric（1.19.3/1.20.1/
+  1.21.1/26.1）已用 mixin 把换档提前到 `ServerLoginConnectionEvents.QUERY_START` 之前**（见 §4b），修复 LuckPerms-Fabric
+  在 `QUERY_START` 同步读离线 UUID → `JOIN` 处 `getIfLoaded(正版)=null` → `LOADING_STATE_ERROR` 干净断开。
 - 依赖两端都装 ZstdNet（本就是硬要求）；原版/盗版客户端不应答查询 → 按 `premium_verification_mode` 处理（默认宽松=离线进服）。
 - `premium_session_server` 可对接外置登录；`premium_pass_real_ip` 默认关（CGNAT 等场景 IP 可能不一致）。
 - **正版身份保护（`premium_uuid_guard`，默认开）**：验证成功即把「玩家名 → 正版 UUID」登记进

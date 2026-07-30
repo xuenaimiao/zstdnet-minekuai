@@ -261,12 +261,19 @@ public final class ServerProxyBootstrap {
 
         SocketAddress remoteAddress = player.connection.getRemoteAddress();
         if (isLoopback(remoteAddress) || ServerRealIpHooks.isForwardedConnection(player.connection.getConnection())) {
-            if (activeLanPort > 0 && !player.connection.getConnection().isMemoryConnection()) {
-                LanCompressionSync.requestCompressionUpgrade(player);
-            }
-            if (!player.connection.getConnection().isMemoryConnection()) {
-                DictionarySync.announce(player);
-                VoicePortSync.send(player);
+            // 兜底：任何下发异常都不允许冒到 PlayerLoggedInEvent 之外——否则会打断
+            // placeNewPlayer，玩家直接卡在「Couldn't place player in world」进不了服。
+            try {
+                if (activeLanPort > 0 && !player.connection.getConnection().isMemoryConnection()) {
+                    LanCompressionSync.requestCompressionUpgrade(player);
+                }
+                if (!player.connection.getConnection().isMemoryConnection()) {
+                    DictionarySync.announce(player);
+                    VoicePortSync.send(player);
+                }
+            } catch (Throwable t) {
+                LOGGER.warn("[zstdnet-server] failed to sync zstdnet state to {}: {}",
+                    player.getGameProfile().name(), t.toString());
             }
             return;
         }
