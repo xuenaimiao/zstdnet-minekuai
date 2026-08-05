@@ -11,19 +11,23 @@ $gradleUserHome = Join-Path $buildRoot 'cache\gradle-user'
 $projectCacheDir = Join-Path $buildRoot "cache\project-cache\zstdnet-fabric-$MinecraftVersion"
 $projectDir = Join-Path $repoRoot "mods\$MinecraftVersion\zstdnet-fabric"
 
+# JDK 实际路径由 jdk-paths.ps1 统一解析（可用 ZSTDNET_JDK<版本> 环境变量覆盖）。
+. (Join-Path $repoRoot 'jdk-paths.ps1')
+
 # Per-MC-version JDK + Gradle distribution (26.1 is un-obfuscated: needs JDK 25 + Gradle 9.x + new Loom)
 switch ($MinecraftVersion) {
-    '1.19.3' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
-    '1.20.1' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
+    '1.19.3' { $jdk = 17; $gradleDir = 'tools\gradle-8.8' }
+    '1.20.1' { $jdk = 17; $gradleDir = 'tools\gradle-8.8' }
     # 1.20.4 覆盖 1.20.3/1.20.4（两者 intermediary 映射逐字节相同）；工具链与 1.20.1 一致
-    '1.20.4' { $javaHome = 'C:\Program Files\Java\jdk-17'; $gradleDir = 'tools\gradle-8.8' }
-    '1.21.1' { $javaHome = 'C:\Program Files\Java\jdk-21'; $gradleDir = 'tools\gradle-8.8' }
+    '1.20.4' { $jdk = 17; $gradleDir = 'tools\gradle-8.8' }
+    '1.21.1' { $jdk = 21; $gradleDir = 'tools\gradle-8.8' }
     # 1.21.11 仍是混淆版本，但需要新版 Loom（1.15.x，经典 fabric-loom 插件 id）+ Gradle 9.x；JDK 仍是 21。
-    '1.21.11' { $javaHome = 'C:\Users\78569\.jdks\liberica-21.0.11'; $gradleDir = 'tools\gradle-9.4.1' }
-    '26.1'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }
-    '26.2'   { $javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'; $gradleDir = 'tools\gradle-9.4.1' }
+    '1.21.11' { $jdk = 21; $gradleDir = 'tools\gradle-9.4.1' }
+    '26.1'   { $jdk = 25; $gradleDir = 'tools\gradle-9.4.1' }
+    '26.2'   { $jdk = 25; $gradleDir = 'tools\gradle-9.4.1' }
     default  { throw "Unsupported Fabric target: $MinecraftVersion" }
 }
+$javaHome = Resolve-ZstdnetJdk $jdk
 $gradleHome = Join-Path $buildRoot $gradleDir
 
 $gradleBat = Join-Path $gradleHome 'bin\gradle.bat'

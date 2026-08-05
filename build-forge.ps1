@@ -11,15 +11,13 @@ $gradleHome = Join-Path $buildRoot 'tools\gradle-8.8'
 $gradleUserHome = Join-Path $buildRoot 'cache\gradle-user'
 $projectCacheDir = Join-Path $buildRoot "cache\project-cache\zstdnet-forge-$MinecraftVersion"
 $projectDir = Join-Path $repoRoot "mods\$MinecraftVersion\zstdnet-forge"
-$javaHome = 'C:\Program Files\Java\jdk-17'
 $gradleBat = Join-Path $gradleHome 'bin\gradle.bat'
+
+. (Join-Path $repoRoot 'jdk-paths.ps1')
+$javaHome = Resolve-ZstdnetJdk 17
 
 if (-not (Test-Path $projectDir)) {
     throw "Project directory not found: $projectDir"
-}
-
-if (-not (Test-Path $javaHome)) {
-    throw "JDK 17 not found: $javaHome"
 }
 
 if (-not (Test-Path $gradleBat)) {

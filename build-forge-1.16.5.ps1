@@ -18,19 +18,12 @@ $projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-forge-1165'
 $projectDir = Join-Path $repoRoot 'mods\1.16.5\zstdnet-forge'
 $gradleBat = Join-Path $gradleHome 'bin\gradle.bat'
 
-# JDK 8：优先本机 liberica；留几个常见回退位。
-$jdk8Candidates = @(
-    'C:\Users\78569\.jdks\liberica-1.8.0_492',
-    'C:\Program Files\Java\jdk1.8.0',
-    'C:\Program Files\Eclipse Adoptium\jdk-8'
-)
-$javaHome = $jdk8Candidates | Where-Object { Test-Path (Join-Path $_ 'bin\javac.exe') } | Select-Object -First 1
+# JDK 8 实际路径由 jdk-paths.ps1 统一解析（可用 ZSTDNET_JDK8 环境变量覆盖）。
+. (Join-Path $repoRoot 'jdk-paths.ps1')
+$javaHome = Resolve-ZstdnetJdk 8
 
 if (-not (Test-Path $projectDir)) {
     throw "Project directory not found: $projectDir"
-}
-if (-not $javaHome) {
-    throw "JDK 8 not found. Tried: $($jdk8Candidates -join ', '). Set one or edit this script."
 }
 if (-not (Test-Path $gradleBat)) {
     throw "Gradle 7.6.4 not found: $gradleBat (download gradle-7.6.4-bin and unzip to that path)."

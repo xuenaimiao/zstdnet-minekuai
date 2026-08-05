@@ -249,6 +249,10 @@ function Invoke-TargetCheck {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildRoot = Join-Path (Split-Path -Parent $repoRoot) 'zstdnet-build'
+# JDK 实际路径由仓库根的 jdk-paths.ps1 统一解析（可用 ZSTDNET_JDK<版本> 环境变量覆盖）。
+. (Join-Path $repoRoot 'jdk-paths.ps1')
+$jdk17 = Resolve-ZstdnetJdk 17
+$jdk21 = Resolve-ZstdnetJdk 21
 $gradleHome = Join-Path $buildRoot 'tools\gradle-8.8\bin\gradle.bat'
 
 $targets = @(
@@ -259,7 +263,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-forge\run'
         publicPort = 25565
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $false
     },
     @{
@@ -269,7 +273,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-neoforge\run'
         publicPort = 25575
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $false
     },
     @{
@@ -279,7 +283,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.21.1\zstdnet-neoforge\run'
         publicPort = 25585
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-21'
+        javaHome = $jdk21
         onlineMode = $false
     },
     @{
@@ -289,7 +293,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.19.3\zstdnet-fabric\run'
         publicPort = 25615
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $false
     },
     @{
@@ -299,7 +303,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-fabric\run'
         publicPort = 25595
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $false
     },
     @{
@@ -309,7 +313,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.4\zstdnet-fabric\run'
         publicPort = 25625
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $false
     },
     @{
@@ -319,7 +323,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\run'
         publicPort = 25605
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-21'
+        javaHome = $jdk21
         onlineMode = $false
     },
     @{
@@ -329,7 +333,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-forge\run'
         publicPort = 25565
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $true
     },
     @{
@@ -339,7 +343,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-neoforge\run'
         publicPort = 25575
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $true
     },
     @{
@@ -349,7 +353,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.21.1\zstdnet-neoforge\run'
         publicPort = 25585
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-21'
+        javaHome = $jdk21
         onlineMode = $true
     },
     @{
@@ -359,7 +363,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.19.3\zstdnet-fabric\run'
         publicPort = 25615
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $true
     },
     @{
@@ -369,7 +373,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.1\zstdnet-fabric\run'
         publicPort = 25595
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $true
     },
     @{
@@ -379,7 +383,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.20.4\zstdnet-fabric\run'
         publicPort = 25625
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         onlineMode = $true
     },
     @{
@@ -389,7 +393,7 @@ $targets = @(
         runDir = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\run'
         publicPort = 25605
         gradleBat = $gradleHome
-        javaHome = 'C:\Program Files\Java\jdk-21'
+        javaHome = $jdk21
         onlineMode = $true
     }
 )

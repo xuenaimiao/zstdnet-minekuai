@@ -75,8 +75,25 @@ ports). To make that exclusion possible, the MC-free pieces of auto-takeover wer
 `DedicatedServerAutoPort` into `server/AutoPortPlan` (record) + `server/DedicatedAutoPortState` (active-plan
 holder), which the core (`ServerProxyRuntime`) and the per-variant bootstraps now reference instead of the
 MC-coupled class. The plugin's own thin layer is `Zstdnet` (JavaPlugin entry), `platform/BukkitPlatform`,
-and `server/ServerProxyBootstrap` (same package as the core, so it can call the package-private
-`start/stop/...`); config defaults are written via `ServerProxyConfigFile.writePluginDefaults(...)`.
+`server/ServerProxyBootstrap` (same package as the core, so it can call the package-private
+`start/stop/...`), `network/VoicePortSync`, and `network/RealIpForwarding`; config defaults are written via
+`ServerProxyConfigFile.writePluginDefaults(...)`.
+
+`network/RealIpForwarding` is the plugin's stand-in for the mod variants' `zstdnet_server_real_ip`
+coremod/mixin: a plugin can't ASM-transform vanilla, so it instead reflects its way to the server's netty
+listener (`CraftServer#getServer()` → `ServerConnectionListener` → `List<ChannelFuture>`, all located **by
+type**, so Spigot-obfuscated and Mojang-mapped Paper both work) and adds an acceptor that puts a one-shot
+handler at the head of every accepted child pipeline. That handler reads the raw first frame, parses the
+vanilla handshake wire format (stable since 1.7 — no `net.minecraft.*` types involved, which is why one jar
+covers 1.20.1 → 1.21.x), pulls the `zstdnet-real-ip=<base64>` marker the proxy appended, **strips it** (so it
+never reaches the backend and can't collide with spigot.yml BungeeCord forwarding, which splits the same host
+on `\0`), and reflectively swaps the `Connection`'s `SocketAddress` field — matched *by current value* rather
+than by field name, so obfuscation doesn't matter and Paper's `haProxyAddress` isn't clobbered. The marker is
+only trusted from loopback peers (same rule as the mod's `isTrustedLocalProxy`); non-loopback children detach
+in `handlerAdded`, so vanilla direct connections cost nothing and can't spoof. Gated by the
+`real_ip_forwarding` config key (default `true`, plugin-only — mod variants always do this via coremod/mixin).
+This is why the plugin's `build.gradle` carries `compileOnly` netty (`netty_version` in `gradle.properties`,
+pinned to the oldest supported server's 4.1.82; netty itself is provided by the server at runtime).
 
 All variants share the Java package `cn.tohsaka.factory.zstdnet`. **The loader-agnostic core
 lives once in `mods/common`** — `core/`, `proxy/LocalZstdNet`, `proxy/AndroidZstdNativeLoader`,
@@ -182,8 +199,15 @@ Builds use an **external build root** at `../zstdnet-build` (a sibling of this r
 It must contain a Gradle 8.8 distribution at `tools/gradle-8.8` (and, for MC 26.1+, a Gradle 9.x
 distribution at `tools/gradle-9.4.1`) and holds all caches and output jars — `build.gradle` redirects
 `layout.buildDirectory` there, so there is no in-repo `build/`. Builds use the external `gradle.bat`
-directly (not the in-repo wrapper). Required JDKs: `C:\Program Files\Java\jdk-17`,
-`C:\Program Files\Java\jdk-21`, and (for 26.1) JDK 25 (`C:\Users\78569\.jdks\liberica-25.0.3`).
+directly (not the in-repo wrapper). Required JDKs: 17, 21, 25 (and 8 for the 1.16.5 Forge variant).
+
+**JDK paths live in exactly one place: `jdk-paths.ps1` at the repo root.** Every build/regression script
+dot-sources it and calls `Resolve-ZstdnetJdk <8|17|21|25>`, which walks a candidate list and returns the
+first directory that actually contains `bin\javac.exe`; `$env:ZSTDNET_JDK<major>` overrides it outright.
+Do not hardcode a JDK path in a new script — add a candidate to `jdk-paths.ps1` instead. Note that file is
+UTF-8 **with BOM** on purpose: PowerShell 5.1 decodes BOM-less `.ps1` as the ANSI codepage, and under GBK a
+Chinese comment ending in `。` can swallow the following newline, silently commenting out the next line of
+code. Any `.ps1` that mixes Chinese comments with code it must not lose should carry the BOM.
 
 **All final jars land in one shared directory `../zstdnet-build/dist/`** (not the scattered
 per-variant `mods/<ver>/<variant>/libs/`). Every variant's `build.gradle` redirects its final

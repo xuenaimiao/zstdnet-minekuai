@@ -1,11 +1,11 @@
 # build-all.ps1 - Build all 17 ZstdNet variants in one pass into ../zstdnet-build/dist/
 #
-# Two things build-*.ps1 does not do:
-#   1. Uses the REAL local JDK paths (D:\JDK = JDK17, tools\jdk-21.0.11+10 = JDK21,
-#      .jdks\liberica-25.0.3 = JDK25, .jdks\liberica-1.8.0_492 = JDK8);
-#      build-forge/bukkit.ps1 hardcode C:\Program Files\Java\jdk-17 which does not exist here.
-#   2. Runs every variant serially, never aborts on a single failure, prints a summary
-#      and lists the jars produced in dist/.
+# What this does that the per-loader build-*.ps1 scripts do not:
+#   Runs every variant serially, never aborts on a single failure, prints a summary
+#   and lists the jars produced in dist/.
+#
+# JDK paths are shared with every other script via jdk-paths.ps1 (override with
+# $env:ZSTDNET_JDK8 / ZSTDNET_JDK17 / ZSTDNET_JDK21 / ZSTDNET_JDK25).
 #
 # Usage:
 #   .\build-all.ps1                                 # all 17
@@ -27,12 +27,12 @@ $logDir    = Join-Path $buildRoot 'cache\build-logs'
 $gradleUserHome = Join-Path $buildRoot 'cache\gradle-user'
 New-Item -ItemType Directory -Force -Path $distDir, $logDir, $gradleUserHome | Out-Null
 
-# Real local JDK paths (verified present)
-$jdks = @{
-    '8'  = 'C:\Users\78569\.jdks\liberica-1.8.0_492'
-    '17' = 'D:\JDK'
-    '21' = Join-Path $buildRoot 'tools\jdk-21.0.11+10'
-    '25' = 'C:\Users\78569\.jdks\liberica-25.0.3'
+# JDK paths come from the shared resolver (jdk-paths.ps1); a version that cannot be
+# resolved is left empty here so the per-variant loop reports [SKIP] instead of aborting the run.
+. (Join-Path $repoRoot 'jdk-paths.ps1')
+$jdks = @{}
+foreach ($v in '8', '17', '21', '25') {
+    try { $jdks[$v] = Resolve-ZstdnetJdk $v } catch { $jdks[$v] = '' }
 }
 $gradles = @{
     '7.6.4' = Join-Path $buildRoot 'tools\gradle-7.6.4\bin\gradle.bat'
@@ -84,8 +84,8 @@ foreach ($v in $variants) {
     Write-Host ""
     Write-Host "==== [$($v.key)] JDK $($v.jdk) / Gradle $($v.gradle) ====" -ForegroundColor Cyan
 
-    if (-not (Test-Path (Join-Path $javaHome 'bin\javac.exe'))) {
-        Write-Host "  [SKIP] JDK $($v.jdk) not found: $javaHome" -ForegroundColor Red
+    if ((-not $javaHome) -or (-not (Test-Path (Join-Path $javaHome 'bin\javac.exe')))) {
+        Write-Host "  [SKIP] JDK $($v.jdk) not found (set `$env:ZSTDNET_JDK$($v.jdk) or see jdk-paths.ps1)" -ForegroundColor Red
         $results += [pscustomobject]@{ key=$v.key; ok=$false; secs=0; note="JDK missing" }
         continue
     }

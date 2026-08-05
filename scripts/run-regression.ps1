@@ -37,6 +37,11 @@ function Invoke-GradleBuild {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildRoot = Join-Path (Split-Path -Parent $repoRoot) 'zstdnet-build'
+# JDK 实际路径由仓库根的 jdk-paths.ps1 统一解析（可用 ZSTDNET_JDK<版本> 环境变量覆盖）。
+. (Join-Path $repoRoot 'jdk-paths.ps1')
+$jdk17 = Resolve-ZstdnetJdk 17
+$jdk21 = Resolve-ZstdnetJdk 21
+$jdk25 = Resolve-ZstdnetJdk 25
 # 默认 Gradle 8.8；26.1 变体需 Gradle 9.x（见各 target 的 gradleBat 覆盖）。
 $gradleBat = Join-Path $buildRoot 'tools\gradle-8.8\bin\gradle.bat'
 $gradleUserHome = Join-Path $buildRoot 'cache\gradle-user'
@@ -49,37 +54,37 @@ $targets = @(
         name = 'forge-1.18.2'
         projectDir = Join-Path $repoRoot 'mods\1.18.2\zstdnet-forge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-forge-1.18.2-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     },
     @{
         name = 'forge-1.19.2'
         projectDir = Join-Path $repoRoot 'mods\1.19.2\zstdnet-forge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-forge-1.19.2-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     },
     @{
         name = 'fabric-1.19.3'
         projectDir = Join-Path $repoRoot 'mods\1.19.3\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.19.3-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     },
     @{
         name = 'forge-1.20.1'
         projectDir = Join-Path $repoRoot 'mods\1.20.1\zstdnet-forge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-forge-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     },
     @{
         name = 'neoforge-1.20.1'
         projectDir = Join-Path $repoRoot 'mods\1.20.1\zstdnet-neoforge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-1.20.1-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     },
     @{
         name = 'neoforge-1.21.1'
         projectDir = Join-Path $repoRoot 'mods\1.21.1\zstdnet-neoforge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-1.21.1-regression'
-        javaHome = 'C:\Program Files\Java\jdk-21'
+        javaHome = $jdk21
         jarSyncSource = Join-Path $buildRoot 'mods\1.21.1\zstdnet-neoforge\libs\zstdnet-1.21.1-neoforge-1.3.6.jar'
         jarSyncTarget = Join-Path $buildRoot 'mods\1.21.1\zstdnet-neoforge\libs\zstdnet-1.21.1-neoforge-1.3.6-all.jar'
     },
@@ -87,7 +92,7 @@ $targets = @(
         name = 'fabric-1.20.1'
         projectDir = Join-Path $repoRoot 'mods\1.20.1\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.20.1-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
         jarSyncSource = Join-Path $buildRoot 'mods\1.20.1\zstdnet-fabric\libs\zstdnet-1.20.1-fabric-1.3.6.jar'
         jarSyncTarget = Join-Path $buildRoot 'mods\1.20.1\zstdnet-fabric\libs\zstdnet-1.20.1-fabric-1.3.6-all.jar'
     },
@@ -96,13 +101,13 @@ $targets = @(
         name = 'fabric-1.20.4'
         projectDir = Join-Path $repoRoot 'mods\1.20.4\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.20.4-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     },
     @{
         name = 'fabric-1.21.1'
         projectDir = Join-Path $repoRoot 'mods\1.21.1\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.21.1-regression'
-        javaHome = 'C:\Program Files\Java\jdk-21'
+        javaHome = $jdk21
         jarSyncSource = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\libs\zstdnet-1.21.1-fabric-1.3.6.jar'
         jarSyncTarget = Join-Path $buildRoot 'mods\1.21.1\zstdnet-fabric\libs\zstdnet-1.21.1-fabric-1.3.6-all.jar'
     },
@@ -110,42 +115,42 @@ $targets = @(
         name = 'neoforge-1.21.11'
         projectDir = Join-Path $repoRoot 'mods\1.21.11\zstdnet-neoforge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-1.21.11-regression'
-        javaHome = 'C:\Users\78569\.jdks\liberica-21.0.11'
+        javaHome = $jdk21
     },
     @{
         # 1.21.11 仍是混淆版本，但需新版 Loom（1.15.x，经典 fabric-loom 插件 id）→ Gradle 9.x；JDK 仍是 21。
         name = 'fabric-1.21.11'
         projectDir = Join-Path $repoRoot 'mods\1.21.11\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-1.21.11-regression'
-        javaHome = 'C:\Users\78569\.jdks\liberica-21.0.11'
+        javaHome = $jdk21
         gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
     },
     @{
         name = 'neoforge-26.1'
         projectDir = Join-Path $repoRoot 'mods\26.1\zstdnet-neoforge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-26.1-regression'
-        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        javaHome = $jdk25
         gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
     },
     @{
         name = 'fabric-26.1'
         projectDir = Join-Path $repoRoot 'mods\26.1\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-26.1-regression'
-        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        javaHome = $jdk25
         gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
     },
     @{
         name = 'neoforge-26.2'
         projectDir = Join-Path $repoRoot 'mods\26.2\zstdnet-neoforge'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-neoforge-26.2-regression'
-        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        javaHome = $jdk25
         gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
     },
     @{
         name = 'fabric-26.2'
         projectDir = Join-Path $repoRoot 'mods\26.2\zstdnet-fabric'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-fabric-26.2-regression'
-        javaHome = 'C:\Users\78569\.jdks\liberica-25.0.3'
+        javaHome = $jdk25
         gradleBat = Join-Path $buildRoot 'tools\gradle-9.4.1\bin\gradle.bat'
     },
     @{
@@ -153,7 +158,7 @@ $targets = @(
         name = 'bukkit'
         projectDir = Join-Path $repoRoot 'mods\bukkit\zstdnet-bukkit'
         projectCacheDir = Join-Path $buildRoot 'cache\project-cache\zstdnet-bukkit-regression'
-        javaHome = 'C:\Program Files\Java\jdk-17'
+        javaHome = $jdk17
     }
 )
 
