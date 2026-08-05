@@ -83,6 +83,7 @@ public final class ServerProxyConfigFile {
         "burst_bytes",
         "trust_proxy_protocol",
         "trusted_proxy_ips",
+        "real_ip_forwarding",
         "premium_verification",
         "premium_verification_mode",
         "premium_session_server",
@@ -183,6 +184,14 @@ public final class ServerProxyConfigFile {
         return Boolean.parseBoolean(loadProperties().getProperty("premium_pass_real_ip", "false").trim());
     }
 
+    /**
+     * 插件端是否还原「经 zstd 代理进来的玩家」的真实 IP（默认开启）。
+     * <p>仅插件端读取：mod 变体由 coremod/mixin（{@code zstdnet_server_real_ip}）恒定完成同一件事，与本项无关。
+     */
+    public static boolean readRealIpForwarding() {
+        return Boolean.parseBoolean(loadProperties().getProperty("real_ip_forwarding", "true").trim());
+    }
+
     /** 正版身份保护：曾正版进服的玩家名验证失败时拒绝而非静默降级离线（默认开启）。 */
     public static boolean readPremiumUuidGuard() {
         return Boolean.parseBoolean(loadProperties().getProperty("premium_uuid_guard", "true").trim());
@@ -266,6 +275,35 @@ public final class ServerProxyConfigFile {
      * @param listenPort  zstd 代理对外监听端口（需与后端端口不同）
      * @param backendPort 本机 Minecraft 后端端口（通常即 server.properties 的 server-port）
      */
+    /**
+     * 补齐配置文件里缺失的新增项：仅当确有已知项缺失时，才按带注释模板整体写回一次
+     * （{@code normalizeProperties} 沿用现有取值、只为缺失项填默认，未知的自定义项也会保留）。
+     * <p>老用户升级后无需删配置就能在文件里看到并读懂新增开关。
+     *
+     * @return 是否实际写回过
+     */
+    public static boolean backfillMissingKeys() throws IOException {
+        Path path = path();
+        if (!Files.exists(path)) {
+            return false;
+        }
+
+        Properties raw = loadProperties();
+        boolean missing = false;
+        for (String key : KNOWN_KEYS) {
+            if (raw.getProperty(key) == null) {
+                missing = true;
+                break;
+            }
+        }
+        if (!missing) {
+            return false;
+        }
+
+        writeConfigWithComments(path, raw, detectLineSeparator(path));
+        return true;
+    }
+
     public static void writePluginDefaults(int listenPort, int backendPort) throws IOException {
         Path path = path();
         Properties props = normalizeProperties(loadProperties());
@@ -342,6 +380,7 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("burst_bytes", "262144");
         props.putIfAbsent("trust_proxy_protocol", "false");
         props.putIfAbsent("trusted_proxy_ips", DEFAULT_TRUSTED_PROXY_IPS);
+        props.putIfAbsent("real_ip_forwarding", "true");
         props.putIfAbsent("premium_verification", DEFAULT_PREMIUM_VERIFICATION);
         props.putIfAbsent("premium_verification_mode", DEFAULT_PREMIUM_VERIFICATION_MODE);
         props.putIfAbsent("premium_session_server", "");
@@ -625,6 +664,16 @@ public final class ServerProxyConfigFile {
         appendLine(builder, "# frpc 和服务端在同一台机器时不用改，保持 127.0.0.1 即可。", lineSeparator);
         appendLine(builder, "# 如果 frpc 在另一台机器，就填那台机器连接到本服务器时使用的内网 IP。", lineSeparator);
         appendLine(builder, "trusted_proxy_ips=" + props.getProperty("trusted_proxy_ips"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 【插件端专用】是否把「经 zstd 代理进来的玩家」在后端还原成真实 IP。默认 true。", lineSeparator);
+        appendLine(builder, "# 关掉的话，这些玩家在进服日志、/ban-ip、按 IP 风控的插件里都只显示 127.0.0.1", lineSeparator);
+        appendLine(builder, "#（代理转发本就是从本机回环连后端）。开启后 zstdnet 会在服务器的 netty 监听上挂一个一次性处理器，", lineSeparator);
+        appendLine(builder, "# 只读登录握手首帧、取出并剥掉 zstdnet 自己的真实 IP 标记，然后把该连接的地址改回真实地址。", lineSeparator);
+        appendLine(builder, "# 只采信来自回环地址的连接，公网玩家直连 server-port 这条路径零开销、也伪造不了 IP。", lineSeparator);
+        appendLine(builder, "# 若你的服务端内核特殊导致注入失败（日志会有 WARN），把它改成 false 即可彻底关闭。", lineSeparator);
+        appendLine(builder, "# mod 版（Forge/NeoForge/Fabric）由 coremod/mixin 恒定完成同一件事，本项对 mod 版无效。", lineSeparator);
+        appendLine(builder, "real_ip_forwarding=" + props.getProperty("real_ip_forwarding"), lineSeparator);
 
         LinkedHashSet<String> extraKeys = new LinkedHashSet<>();
         for (String key : rawProps.stringPropertyNames()) {

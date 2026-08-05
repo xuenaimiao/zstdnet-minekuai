@@ -110,6 +110,15 @@ public final class ServerProxyBootstrap {
 
     private static void ensureConfig(int backend) {
         if (Files.exists(ServerProxyConfigFile.path())) {
+            // 老配置缺新增项时按带注释模板补齐一次（沿用现有取值），否则升级后服主看不到新开关。
+            try {
+                if (ServerProxyConfigFile.backfillMissingKeys()) {
+                    logger.info("[zstdnet] added newly introduced options to " + ServerProxyConfigFile.path()
+                        + " (existing values kept).");
+                }
+            } catch (IOException e) {
+                logger.warning("[zstdnet] failed to backfill new config options: " + e);
+            }
             return;
         }
         int listenPort = backend + 1;

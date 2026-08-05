@@ -50,6 +50,11 @@ configurations {
 
 dependencies {
     compileOnly "org.spigotmc:spigot-api:${spigot_api_version}"
+    // 真实 IP 还原（network/RealIpForwarding）要在服务端 netty 管线上挂处理器。netty 由服务端自带
+    // （1.20.1 为 4.1.82、1.21.x 为 4.1.97），故仅编译期依赖、不打包；只用 4.1 全系稳定的那几个 API，
+    // 对着最低的 4.1.82 编译即可向上兼容。
+    compileOnly "io.netty:netty-buffer:${netty_version}"
+    compileOnly "io.netty:netty-transport:${netty_version}"
     // common 核心用 slf4j 记日志；Paper/Spigot 1.20+ 运行时自带 slf4j-api（log4j-slf4j2 桥），故仅编译期依赖、不打包，避免与服务端的实现冲突。
     compileOnly 'org.slf4j:slf4j-api:2.0.9'
     // 编译期 + test 运行期用原包名 com.github.luben.zstd（test 下宿主即有 zstd，门面走宿主模式）；

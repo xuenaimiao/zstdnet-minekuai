@@ -144,3 +144,6 @@ target=127.0.0.1:25565   # 你后端 Minecraft 的真实端口
 
 简单说：直连 zstd 入口时本就能拿到真实 IP；前面有 FRP/反代时需要额外配置 `trust_proxy_protocol`。
 细节见仓库根目录 [`README.zh-CN.md`](../README.zh-CN.md) 的「真实 IP / FRP PROXY v2 怎么选」一节。
+
+后端那一侧（进服日志、`/ban-ip`、按 IP 风控的插件）默认就能看到真实 IP，无需配置：mod 版由 coremod/mixin
+完成，插件版由 `real_ip_forwarding=true`（默认）完成。只有想彻底关掉时才需要改这一项。

@@ -182,7 +182,9 @@ auto_takeover=true
 - 最省心：直接用本插件（丢进 `plugins/`），不依赖混合端对 coremod/自动接管的兼容性。
 - 也可以用对应的 Forge/NeoForge **mod 版**（丢进 `mods/`）；但混合端可能改了端口初始化或网络栈，若 `auto_takeover` 改端口失败，请把 mod 版配置里的 `auto_takeover` 改为 `false` 并手填 `listen`/`target`，或直接改用插件版。
 
-**关于真实 IP（frp / 反代场景）**：插件端默认情况下，经代理进来的玩家在后端看来是 `127.0.0.1`（本机回环）。绝大多数服务器无影响；但若你用 frp/反代并且需要后端按 IP 封禁 / 风控 / 地理定位，目前请用平台原生的 IP 转发（Velocity 现代转发 / BungeeCord / 服务端 `proxy-protocol`）。ZstdNet 插件端的「透明真实 IP 还原」需要按服务端版本做 netty 注入、影响面是整服网络，需在真实服上充分验证，作为后续增强项暂未随本版本提供。
+**真实 IP 自动还原**：代理是从本机回环连后端的，所以经代理进来的玩家本来会在进服日志、`/ban-ip`、连接节流以及各类按 IP 风控的插件里统统显示成 `127.0.0.1`。插件端已用与 mod 版相同的思路解决：代理转发登录握手时给 host 打上玩家真实地址标记，插件在连接的第一帧读出该标记、**剥掉**（不让后端看见）并把这条连接的地址改回真实地址。默认开启；不想要就在 `zstdnet-server.properties` 里设 `real_ip_forwarding=false`。标记只在「连接来自回环地址」时才采信，因此原版玩家直连 `server-port` 这条路径既不会被解析、也伪造不了 IP。若某些特殊内核上注入失败，日志里只会出现一条 `WARN`，代理本身照常工作。
+
+> 若 ZstdNet 前面还有 frp / 反代，那么 ZstdNet 自己看到的就已经是 frpc 的地址了，此时仍需按下文「[真实 IP / FRP PROXY v2 怎么选](#真实-ip--frp-proxy-v2-怎么选)」配置 `trust_proxy_protocol=true` + `trusted_proxy_ips`，并在 frp 侧开启 PROXY protocol v2。
 
 ## FRP 典型链路
 
