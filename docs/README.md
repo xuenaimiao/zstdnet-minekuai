@@ -51,3 +51,8 @@ A beginner-friendly guide to using voice mods (Simple Voice Chat, Plasmo Voice, 
 
 - 🗣️ **[语音 mod 使用指南（中文）](voice.zh-CN.md)**
 - 🗣️ **[Voice Mod Guide (English)](voice.en-US.md)**
+
+### 对外发布文案 · Publishing copy
+
+- 📄 **[MC 百科（mcmod.cn）模组介绍正文](mcmod-cn-post.zh-CN.md)** —— 按 mcmod 编辑器能力（无标题字号、仅
+  加粗/列表/表格/代码块）写好的纯文本成稿，复制即可粘贴发布。
