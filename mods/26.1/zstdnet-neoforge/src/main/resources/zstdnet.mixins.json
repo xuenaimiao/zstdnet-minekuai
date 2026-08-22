@@ -1,0 +1,22 @@
+{
+  "required": false,
+  "package": "cn.tohsaka.factory.zstdnet.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "minVersion": "0.8",
+  "mixins": [
+    "MinecraftServerMixin",
+    "DedicatedServerMixin",
+    "ClientIntentionPacketMixin",
+    "ServerHandshakePacketListenerImplMixin",
+    "ConnectionMixin",
+    "PremiumAuthServerLoginMixin"
+  ],
+  "client": [
+    "ConnectScreenMixin",
+    "PremiumAuthClientQueryMixin",
+    "TabPlayerHeadOverlayMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
