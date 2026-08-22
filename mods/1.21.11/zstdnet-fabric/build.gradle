@@ -87,11 +87,12 @@ test {
 
 processResources {
     def replaceProperties = [
-        mod_id           : mod_id,
-        mod_name         : mod_name,
-        mod_version      : mod_version,
-        minecraft_version: minecraft_version,
-        loader_version   : loader_version
+        mod_id            : mod_id,
+        mod_name          : mod_name,
+        mod_version       : mod_version,
+        minecraft_version : minecraft_version,
+        loader_version    : loader_version,
+        loader_min_version: loader_min_version
     ]
     inputs.properties(replaceProperties)
 

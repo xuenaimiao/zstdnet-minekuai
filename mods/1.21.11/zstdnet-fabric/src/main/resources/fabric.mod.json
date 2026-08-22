@@ -21,7 +21,7 @@
     "zstdnet.mixins.json"
   ],
   "depends": {
-    "fabricloader": ">=${loader_version}",
+    "fabricloader": ">=${loader_min_version}",
     "minecraft": ">=1.21.11 <1.22",
     "fabric-api": "*",
     "java": ">=21"
