@@ -113,6 +113,14 @@ import java.util.stream.Collectors;
 final class ServerProxyRuntime {
     static final String ZSTD_ADDRESS_HINT = "当前服务器启用了 ZSTD 连接，请联系服务器管理员获取正确的连接地址。";
 
+    // 裸（未装 ZstdNet 的）客户端直连 ZSTD 入口端口时的拒绝原因。除了「找管理员」外，再给出麦块联机玩家可以自助
+    // 解决的两条路径（用整合包广场的现成客户端 / 自行下载 MOD），免得玩家卡在这一步只能开工单。
+    private static final String RAW_LOGIN_REJECT_MSG =
+        "当前服务器启用了 ZSTD 连接，请联系服务器管理员获取正确的连接方式。\n\n"
+        + "如果您使用的是麦块联机服务器，请使用整合包广场提供的客户端，我们已经配置好 mod 可以直接进入。\n"
+        + "如果您仍需要使用自己的客户端，您可以在控制台左侧「网络优化」处下载最新版本的 ZSTD MOD，"
+        + "放入您的 mods 文件夹即可。";
+
     // 后端 MC 服务器不可达 / 崩溃 / 重启时给登录态 ZSTD 客户端的真实原因。代理在线但后端没了——客户端那边只能笼统判为
     // 「无响应」，由我方（代理）补发明确原因。注意：客户端下行走 zstd 解压，故必须压缩后再写（见 sendCompressedLoginDisconnect）。
     private static final String BACKEND_UNAVAILABLE_MSG =
@@ -470,10 +478,7 @@ final class ServerProxyRuntime {
             DetectedClientMode clientMode = detectClientMode(pushIn);
             if (clientMode.mode == ClientMode.RAW_LOGIN) {
                 LOGGER.warn("[server] rejected raw login attempt from {} on zstd-only entry", guardIp);
-                sendLoginDisconnect(
-                    clientSocket,
-                    "当前服务器启用了 ZSTD 连接，请联系服务器管理员获取正确的连接方式。\n"
-                );
+                sendLoginDisconnect(clientSocket, RAW_LOGIN_REJECT_MSG);
                 return;
             }
 
