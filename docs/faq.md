@@ -13,7 +13,7 @@
 3. **后端 `online-mode`**：mod 服后端需要 `online-mode=false`（见 [开服主怎么用](for-server-owners.md)）。
 4. **连的端口对不对**：
    - mod 服默认 `auto_takeover=true` → 连**原来的地址端口**即可。
-   - 插件服 / 手动模式 → 要连服主指定的 **zstd 入口端口**（插件服默认 `:25566`）。
+   - 插件服 / Velocity 群组服 / 手动模式 → 要连服主指定的 **zstd 入口端口**（插件服、Velocity 默认都是游戏端口 + 1，如 `:25566`）。
 5. **防火墙 / 安全组**：服主要放行对外的 zstd 入口端口。
 6. **开了 `trust_proxy_protocol=true`？** 那么直连 zstd 端口、但不带 PROXY v2 头的连接会被**故意拒绝**
    （防伪造真实 IP）。直连场景请保持 `trust_proxy_protocol=false`。
@@ -77,11 +77,29 @@
 
 ---
 
-## 插件服后端看到的玩家 IP 都是 127.0.0.1？
+## Velocity / 群组服怎么用？
 
-插件版默认情况下，经代理进来的玩家在后端看是本机回环 `127.0.0.1`。绝大多数服无影响；
-若你用 FRP/反代且需要后端按真实 IP 封禁 / 风控，目前请用平台原生的 IP 转发
-（Velocity 现代转发 / BungeeCord / 服务端 `proxy-protocol`）。这是已知限制，后续增强中。
+把 `zstdnet-velocity-<版本>.jar` 放进 **Velocity** 的 `plugins/`，放行它生成的 zstd 入口端口（默认 Velocity 端口 + 1，
+如 `25566`），让装了客户端 mod 的玩家连这个端口即可。**子服什么都不用装**——也**不要**在子服上装 ZstdNet mod 服务端
+（它会把子服端口变成只收 ZSTD 的入口，Velocity 连过去会被拒绝，子服日志出现 `rejected raw login attempt`；非装不可就在子服上设 `enabled=false`）。
+真实 IP、只对 ZstdNet 连接关闭 Velocity 的 zlib 压缩、`online-mode=true` 下的正版验证都自动处理，不用改 `velocity.toml`。
+详见 [开服主怎么用 → D. Velocity 群组服](for-server-owners.md#d-velocity-群组服)。
+
+---
+
+## 插件服 / Velocity 看到的玩家 IP 都是 127.0.0.1？
+
+现在不会了：插件版（Bukkit）与 Velocity 插件都**默认自动还原真实 IP**（`real_ip_forwarding=true`）。代理转发登录时
+给握手打上玩家真实地址标记，服务端 / Velocity 读出后剥掉标记、把连接地址改回真实 IP，进服日志、`/ban-ip`、
+按 IP 风控的插件都能看到真实 IP；Velocity 后面的子服也会经 Velocity 自身的转发拿到真实 IP。标记只信任本机连接，伪造不了。
+
+如果仍看到 `127.0.0.1`：
+
+- 确认没把 `real_ip_forwarding` 改成 `false`；
+- 若 ZstdNet 前面还有 FRP / 反代，ZstdNet 自己看到的就是 frpc 的地址，需要额外配置
+  `trust_proxy_protocol=true` + `trusted_proxy_ips`，并在 frp 侧开启 PROXY protocol v2
+  （见 [`README.zh-CN.md`](../README.zh-CN.md) 的「真实 IP / FRP PROXY v2 怎么选」）；
+- 个别特殊服务端内核上注入失败时，日志里会有一条 `WARN`，此时代理照常工作、只是不还原 IP。
 
 ---
 

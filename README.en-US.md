@@ -45,6 +45,7 @@ It is recommended to install this mod on both the client and the server.
   (1.21.11 requires Java 21; that build targets 1.21.11 only — it is not compatible with 1.21.9 / 1.21.10)
   (the Fabric 1.20.4 build also covers 1.20.3 — identical mappings; 1.20.2 and 1.20.5+ are NOT compatible)
 - **Plugin servers (no mod loader)**: Bukkit / Spigot / Paper / Purpur, plus hybrid servers like Arclight / Mohist — see "[Plugin & Hybrid Servers](#plugin--hybrid-servers-bukkit--spigot--paper--arclight--mohist)" below
+- **Velocity proxy (networks)**: install on Velocity only, nothing on the backend servers — see "[Velocity Proxy Plugin](#velocity-proxy-plugin)" below
 - When connecting to a remote ZstdNet-enabled server: the client needs it
 - When using the built-in Zstd server entry: the server needs it
 - When opening a LAN world and sharing a Zstd entry externally: the host client needs it
@@ -99,7 +100,7 @@ ZstdNet can now verify premium accounts **itself**: during login it uses a custo
 - Premium identity guard (`premium_uuid_guard`, on by default): a name that previously joined as a verified premium account is rejected with a clear "please re-login in your launcher" message when its session fails to verify, instead of silently falling back to an offline UUID (which would look like a wiped inventory).
 - Compatible with permission systems like LuckPerms: the premium profile swap now completes *before* the permission system reads the login UUID, so premium players are no longer wrongly kicked with "Invalid player data" due to a UUID-timing race (previously triggered on hybrid servers such as Arclight + LuckPerms + an external login). **Covered on every loader — Forge / NeoForge / Fabric** (Fabric via a mixin gate, the rest via coremods).
 
-> **The built-in feature now ships in every mod loader**: Fabric, Forge, and NeoForge (1.18.2 ~ 26.3; see `PREMIUM_VERIFICATION.md`). **The Bukkit/Spigot plugin does not support it** (a standalone proxy cannot hook MC login) — on the plugin keep the backend on `online-mode=false` (optionally pairing [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) to preserve premium identity). ZstdNet will not silently switch the backend to offline on a loader that cannot verify.
+> **The built-in feature now ships in every mod loader**: Fabric, Forge, and NeoForge (1.18.2 ~ 26.3; see `PREMIUM_VERIFICATION.md`). **The Bukkit/Spigot plugin does not support it** (a standalone proxy cannot hook MC login) — on the plugin keep the backend on `online-mode=false` (optionally pairing [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) to preserve premium identity). **The Velocity plugin does support it** (it hooks Velocity's own login flow — see "[Velocity Proxy Plugin](#velocity-proxy-plugin)"). ZstdNet will not silently switch the backend to offline on a loader that cannot verify.
 >
 > Note: once built-in verification is on, verified players use their premium UUID, and existing offline `playerdata` is not migrated automatically (same as any offline→online switch).
 
@@ -180,9 +181,48 @@ players with ZstdNet      ──► plugin proxy 25566 ──(decompress)──�
 - Simplest: use this plugin (drop into `plugins/`) — it does not rely on the hybrid's coremod / auto-takeover compatibility.
 - You may also use the matching Forge/NeoForge **mod build** (drop into `mods/`); but hybrids may alter port init or the network stack, so if `auto_takeover` fails to relocate the port, set `auto_takeover=false` in the mod's config and fill in `listen`/`target` manually, or just use the plugin build instead.
 
-**Real IP is restored automatically**: because the proxy dials the backend over loopback, a relayed player would otherwise show up as `127.0.0.1` in the join log, `/ban-ip`, connection throttling and any IP-based plugin. The plugin fixes this the same way the mod builds do — the proxy tags the login handshake with the player's real address, and the plugin reads that tag off the first frame, strips it (so it never reaches the backend), and rewrites the connection's address. It is on by default; set `real_ip_forwarding=false` in `zstdnet-server.properties` to disable. The tag is only trusted on loopback connections, so vanilla players connecting straight to `server-port` are never parsed and cannot spoof an address. If injection fails on an unusual server build, a `WARN` is logged once and the proxy keeps working without the restore.
+**Real IP is restored automatically**: because the proxy dials the backend over loopback, a relayed player would otherwise show up as `127.0.0.1` in the join log, `/ban-ip`, connection throttling and any IP-based plugin. The plugin fixes this the same way the mod builds do — the proxy tags the login handshake with the player's real address, and the plugin reads that tag off the first frame, strips it (so it never reaches the backend), and rewrites the connection's address. It is on by default; set `real_ip_forwarding=false` in `zstdnet-server.properties` to disable. The tag is only trusted on loopback connections, so vanilla players connecting straight to `server-port` are never parsed and cannot spoof an address. If injection fails on an unusual server build, a `WARN` is logged once and the proxy keeps working without the restore. (The Velocity plugin restores the real IP automatically as well — see "[Velocity Proxy Plugin](#velocity-proxy-plugin)".)
 
 > If frp / a reverse proxy sits in front of ZstdNet, the address ZstdNet itself sees is frpc's, so you still need `trust_proxy_protocol=true` + `trusted_proxy_ips` plus PROXY protocol v2 on the frp side — see "[Real IP / FRP PROXY v2 Mode](#real-ip--frp-proxy-v2-mode)".
+
+## Velocity Proxy Plugin
+
+If you run a **Velocity** network (one Velocity proxy in front of several backend servers), install the **Velocity plugin build** `zstdnet-velocity-<version>.jar` on Velocity. The prerequisite is the same as for the Bukkit plugin: **players who want compression still install the ZstdNet client mod**; vanilla players keep connecting to Velocity directly and are unaffected.
+
+The model matches the Bukkit plugin: Velocity keeps its own `bind` port, and the plugin opens a separate zstd entry port:
+
+```text
+vanilla / no-mod players ──────────────────────────────►  Velocity 25565 ──► backends
+players with ZstdNet      ──► ZstdNet 25566 ──(decompress)──► 127.0.0.1:25565 Velocity ──► backends
+```
+
+**Installation**:
+
+1. Drop `zstdnet-velocity-<version>.jar` into Velocity's `plugins/` folder and start. **The same jar supports Velocity 3.4 / 3.5 (Java 21) and 4.x (Java 25).**
+2. First start generates `plugins/zstdnet/zstdnet-server.properties` with defaults:
+   ```properties
+   enabled=true
+   auto_takeover=false
+   listen=0.0.0.0:25566      # zstd entry (= Velocity's bind port + 1)
+   target=127.0.0.1:25565    # Velocity's local bind port
+   ```
+   If `bind` in `velocity.toml` is a specific IP rather than `0.0.0.0`, set `target` to that IP.
+3. Open the `listen` port (e.g. 25566) in your firewall / security group. Vanilla players keep using 25565.
+4. Players with the ZstdNet client mod connect to `serverIp:25566` to get compression. All other settings (compression level, dictionaries, rate limits, …) are identical to a mod server.
+
+**Backend servers need nothing.** In fact, do **not** install the ZstdNet mod server-side on backends behind Velocity: its `auto_takeover` turns the backend port into a ZSTD-only entry, and Velocity's plain connection is rejected (the backend logs `rejected raw login attempt` and players are kicked with "当前服务器启用了 ZSTD 连接…") (if you must install it there, set `enabled=false` on that backend).
+
+**Admin commands**: `/zstdnet status|reload|start|stop`, same as the Bukkit plugin but registered as a Velocity proxy command; requires `zstdnet.admin` (the console is always allowed). Config edits hot-reload within a few seconds.
+
+**Handled automatically — no `velocity.toml` changes needed**:
+
+- **Real IP**: with the default `real_ip_forwarding=true`, Velocity sees the player's real IP (bans, logs, rate limits all work), and backends get it too through Velocity's player-info forwarding. It also works when `velocity.toml` has `haproxy-protocol = true`. The marker is only trusted from local connections, so it cannot be spoofed. If frp sits in front of the ZstdNet port, the usual rules apply: configure `trust_proxy_protocol` + `trusted_proxy_ips` as in "[Real IP / FRP PROXY v2 Mode](#real-ip--frp-proxy-v2-mode)".
+- **Compression**: the plugin turns off Velocity's own zlib compression **only for connections coming through ZstdNet** (ZSTD on top of zlib gains almost nothing); vanilla players keep Velocity's `compression-threshold`.
+- **Premium accounts**: when Velocity has `online-mode=true`, ZstdNet connections skip Velocity's AES encryption handshake (encryption would make compression impossible) and use ZstdNet's built-in premium verification instead: `premium_verification=auto` follows Velocity's `online-mode`, and `premium_verification_mode`, `premium_session_server`, `premium_uuid_guard` and `premium_pass_real_ip` work as in the mod (see "[Built-in premium verification](#built-in-premium-verification-no-extra-mod-needed)"). Clients that complete verification: Forge 1.18.2 / 1.19.2 / 1.20.1 and NeoForge 1.20.1 / 1.21.1 (1.4.2-m1+), every Fabric version, and NeoForge 1.21.11 / 26.x (1.4.2-m2.9+). Clients that can't answer (older builds, offline launcher sessions) are handled per `premium_verification_mode` (`lenient` falls back to an offline UUID, `strict` rejects; names that previously joined as premium are protected by `premium_uuid_guard`). Forge 1.16.5 clients have no out-of-band verification and go through Velocity's own online-mode login as usual (encrypted; the plugin then keeps Velocity's zlib compression, ZSTD just adds nothing). Vanilla players connecting straight to Velocity still get Velocity's normal online-mode authentication.
+
+**Clients need no update** to get compression. With the client's default `raw_fallback=true`, a mod player who connects to Velocity's normal port simply plays uncompressed.
+
+**Limitations**: the Bukkit plugin's voice-port sync (auto-detecting independent UDP ports and pushing them to clients) is not ported to Velocity; only same-port UDP passthrough applies there. Switching between backend servers works as usual — ZstdNet sits in front of Velocity and never sees a backend switch as a new connection.
 
 ## Typical FRP Chain
 
@@ -330,6 +370,7 @@ Check these first:
 5. Make sure the Zstd port is not already in use by another program.
 6. Make sure no other mod is intercepting the login or handshake flow.
 7. In LAN setups, use the Zstd port shown in chat. The game port can usually be left empty because ZstdNet follows the actual LAN session port automatically.
+8. On a Velocity network, do not install the ZstdNet mod server-side on the backends (or set `enabled=false` there); otherwise Velocity's connection to the backend is rejected (backend log: `rejected raw login attempt`).
 
 ### Does a ratio near 100% mean it's not working?
 
@@ -342,6 +383,10 @@ Some traffic simply does not compress well, or may already be encrypted, which r
 Possibly.
 
 UI-heavy menu rewrites can still cause compatibility issues.
+
+### How do I use it with Velocity / a server network?
+
+Drop `zstdnet-velocity-<version>.jar` into **Velocity's** `plugins/`, open the zstd entry port it generates (Velocity's port + 1 by default, e.g. 25566), and have players with the client mod connect to that port. **Backend servers need nothing** (and should not run the ZstdNet mod server-side). Real IP, turning off Velocity's zlib compression for ZstdNet connections only, and premium verification under `online-mode=true` are all handled automatically. See "[Velocity Proxy Plugin](#velocity-proxy-plugin)".
 
 ### What about Simple Voice Chat, Plasmo Voice or other UDP-based voice mods?
 

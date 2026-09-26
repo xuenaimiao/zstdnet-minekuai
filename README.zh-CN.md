@@ -47,6 +47,7 @@ Raw: 189.07 GB (4.8MB/s) | Zstd: 10.28 GB (303.7KB/s) | Ratio: 5.44% | Conns: 8
   （Fabric 1.20.4 构建同时覆盖 1.20.3——两者映射一致；1.20.2 与 1.20.5+ 不兼容，请勿混用）
   （1.18.2 为 Forge 专属；其实体级变换收益自动退化为版本无关的去交错，详见下文「实体包流变换」）
 - **插件端（无需 mod 加载器）**：Bukkit / Spigot / Paper / Purpur，以及 Arclight / Mohist 等混合端 —— 详见下方「[插件端 / 混合端](#插件端--混合端bukkit--spigot--paper--arclight--mohist)」
+- **Velocity 代理端（群组服）**：装在 Velocity 上，子服无需安装 —— 详见下方「[Velocity 代理端（群组服）](#velocity-代理端群组服)」
 - 普通连接远程 ZstdNet 服务器时：客户端需要安装
 - 使用内置 Zstd 服务端入口时：服务端需要安装
 - 单机开放局域网并对外分享 Zstd 入口时：房主客户端需要安装
@@ -101,7 +102,7 @@ ZstdNet 现在可以**内置**正版账号验证：在登录阶段用一条自�
 - 正版身份保护（`premium_uuid_guard`，默认开）：曾正版进服的玩家名若本次验证不通过（如启动器会话过期），会被拒绝并提示「请重新登录启动器」，而不是静默以离线 UUID 进服导致背包/进度「丢失」。
 - 与 LuckPerms 等权限系统兼容：正版换档已提前到权限系统读取登录 UUID <b>之前</b>完成，正版玩家进服不会再因 UUID 时序冲突被误踢「无效的玩家数据」（此前混合端如 Arclight + LuckPerms + 外置登录会触发）。**Forge / NeoForge / Fabric 各加载器均已覆盖**（Fabric 走 mixin 门控，其余走 coremod）。
 
-> **全部模组加载器已内置该功能**：Fabric、Forge、NeoForge（1.18.2 ~ 26.3，详见仓库 `PREMIUM_VERIFICATION.md`）。**Bukkit/Spigot 插件端暂不支持**（独立代理无法挂钩 MC 登录），插件端请仍把后端设 `online-mode=false`（如需保留正版身份可搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)）。ZstdNet 不会在无法验证的加载器上擅自把后端改成离线。
+> **全部模组加载器已内置该功能**：Fabric、Forge、NeoForge（1.18.2 ~ 26.3，详见仓库 `PREMIUM_VERIFICATION.md`）。**Bukkit/Spigot 插件端暂不支持**（独立代理无法挂钩 MC 登录），插件端请仍把后端设 `online-mode=false`（如需保留正版身份可搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid)）。**Velocity 插件支持**（挂钩的是 Velocity 自己的登录流程，见下方「[Velocity 代理端（群组服）](#velocity-代理端群组服)」）。ZstdNet 不会在无法验证的加载器上擅自把后端改成离线。
 >
 > 注意：开启内置验证后，被验证玩家会用正版 UUID，原离线 `playerdata` 不会自动迁移（与任何离线→在线切换相同）。
 
@@ -182,9 +183,48 @@ auto_takeover=true
 - 最省心：直接用本插件（丢进 `plugins/`），不依赖混合端对 coremod/自动接管的兼容性。
 - 也可以用对应的 Forge/NeoForge **mod 版**（丢进 `mods/`）；但混合端可能改了端口初始化或网络栈，若 `auto_takeover` 改端口失败，请把 mod 版配置里的 `auto_takeover` 改为 `false` 并手填 `listen`/`target`，或直接改用插件版。
 
-**真实 IP 自动还原**：代理是从本机回环连后端的，所以经代理进来的玩家本来会在进服日志、`/ban-ip`、连接节流以及各类按 IP 风控的插件里统统显示成 `127.0.0.1`。插件端已用与 mod 版相同的思路解决：代理转发登录握手时给 host 打上玩家真实地址标记，插件在连接的第一帧读出该标记、**剥掉**（不让后端看见）并把这条连接的地址改回真实地址。默认开启；不想要就在 `zstdnet-server.properties` 里设 `real_ip_forwarding=false`。标记只在「连接来自回环地址」时才采信，因此原版玩家直连 `server-port` 这条路径既不会被解析、也伪造不了 IP。若某些特殊内核上注入失败，日志里只会出现一条 `WARN`，代理本身照常工作。
+**真实 IP 自动还原**：代理是从本机回环连后端的，所以经代理进来的玩家本来会在进服日志、`/ban-ip`、连接节流以及各类按 IP 风控的插件里统统显示成 `127.0.0.1`。插件端已用与 mod 版相同的思路解决：代理转发登录握手时给 host 打上玩家真实地址标记，插件在连接的第一帧读出该标记、**剥掉**（不让后端看见）并把这条连接的地址改回真实地址。默认开启；不想要就在 `zstdnet-server.properties` 里设 `real_ip_forwarding=false`。标记只在「连接来自回环地址」时才采信，因此原版玩家直连 `server-port` 这条路径既不会被解析、也伪造不了 IP。若某些特殊内核上注入失败，日志里只会出现一条 `WARN`，代理本身照常工作。（Velocity 插件同样默认自动还原真实 IP，见下方「[Velocity 代理端（群组服）](#velocity-代理端群组服)」。）
 
 > 若 ZstdNet 前面还有 frp / 反代，那么 ZstdNet 自己看到的就已经是 frpc 的地址了，此时仍需按下文「[真实 IP / FRP PROXY v2 怎么选](#真实-ip--frp-proxy-v2-怎么选)」配置 `trust_proxy_protocol=true` + `trusted_proxy_ips`，并在 frp 侧开启 PROXY protocol v2。
+
+## Velocity 代理端（群组服）
+
+用 **Velocity** 做群组服（一个 Velocity 在前、后面挂多个子服）时，把 **Velocity 插件版** `zstdnet-velocity-<版本>.jar` 装在 Velocity 上即可。前提与插件端相同：**想要压缩的玩家仍需安装 ZstdNet 客户端 mod**，原版玩家照常直连 Velocity、不受影响。
+
+模型与 Bukkit 插件一致：Velocity 照常占用自己的 `bind` 端口，插件另开一个独立的 zstd 入口端口：
+
+```text
+原版/未装 mod 玩家  ─────────────────────────────►  Velocity 25565 ──► 各子服
+装了 ZstdNet 的玩家 ──► ZstdNet 25566 ──(解压)──► 127.0.0.1:25565 Velocity ──► 各子服
+```
+
+**安装步骤**：
+
+1. 把 `zstdnet-velocity-<版本>.jar` 放进 Velocity 的 `plugins/` 目录并启动。**同一个 jar 同时支持 Velocity 3.4 / 3.5（Java 21）与 4.x（Java 25）**。
+2. 首次启动会生成 `plugins/zstdnet/zstdnet-server.properties`，默认：
+   ```properties
+   enabled=true
+   auto_takeover=false
+   listen=0.0.0.0:25566      # zstd 入口（= Velocity 的 bind 端口 + 1）
+   target=127.0.0.1:25565    # 本机 Velocity 的 bind 端口
+   ```
+   若 `velocity.toml` 的 `bind` 填的是某个具体 IP 而不是 `0.0.0.0`，请把 `target` 改成那个 IP。
+3. 在防火墙 / 安全组放行 `listen` 端口（如 25566）。原版玩家继续用 25565。
+4. 装了 ZstdNet 客户端 mod 的玩家填 `服务器IP:25566` 即享压缩；其余压缩等级、字典、限速等配置项与 mod 服完全一致。
+
+**子服什么都不用装**。反过来，**不要**在 Velocity 后面的子服上装 ZstdNet mod 服务端：它的 `auto_takeover` 会把子服端口变成只收 ZSTD 的入口，Velocity 的普通连接会被拒绝（子服日志出现 `rejected raw login attempt`，玩家被踢出并提示「当前服务器启用了 ZSTD 连接…」）（确实要装时，在子服上设 `enabled=false`）。
+
+**管理指令**：`/zstdnet status|reload|start|stop`，与插件端相同，但它是 Velocity 代理端指令，需要 `zstdnet.admin` 权限（控制台始终可用）；改完配置几秒内自动热重载。
+
+**以下几件事自动处理，无需改 `velocity.toml`**：
+
+- **真实 IP**：默认 `real_ip_forwarding=true`，Velocity 看到的就是玩家真实 IP（封禁、日志、限流都正常），子服也会经 Velocity 自身的玩家信息转发拿到真实 IP；`velocity.toml` 开了 `haproxy-protocol = true` 也照常可用。标记只信任本机连接，无法伪造。ZstdNet 前面还有 frp 时，规则不变：按「[真实 IP / FRP PROXY v2 怎么选](#真实-ip--frp-proxy-v2-怎么选)」配 `trust_proxy_protocol` + `trusted_proxy_ips`。
+- **压缩**：插件**只对经 ZstdNet 进来的连接**关闭 Velocity 自带的 zlib 压缩（否则 ZSTD 叠在 zlib 上几乎没有收益）；原版玩家照旧使用 Velocity 的 `compression-threshold`。
+- **正版验证**：Velocity 设了 `online-mode=true` 时，经 ZstdNet 进来的连接会跳过 Velocity 的 AES 加密握手（加密后就无法压缩），改用 ZstdNet 内置正版验证：`premium_verification=auto` 跟随 Velocity 的 `online-mode`，`premium_verification_mode`、`premium_session_server`、`premium_uuid_guard`、`premium_pass_real_ip` 与 mod 版含义相同（见上文「[内置正版验证](#内置正版验证无需额外装-mod)」）。能完成验证的客户端：Forge 1.18.2 / 1.19.2 / 1.20.1 与 NeoForge 1.20.1 / 1.21.1（1.4.2-m1 起）、各 Fabric 版本、NeoForge 1.21.11 / 26.x（1.4.2-m2.9 起）；答不上验证请求的客户端（更早的版本、启动器离线会话）按 `premium_verification_mode` 处理（`lenient` 回落离线 UUID，`strict` 拒绝；曾正版进服的名字受 `premium_uuid_guard` 保护）。Forge 1.16.5 客户端不支持带外验证，会照常走 Velocity 自身的正版验证（加密；插件此时保留 Velocity 的 zlib 压缩，只是 ZSTD 没有额外收益）。直连 Velocity 的原版玩家仍走 Velocity 常规的正版验证。
+
+**客户端无需更新**即可享受压缩；客户端默认 `raw_fallback=true`，装了 mod 的玩家如果连的是 Velocity 的普通端口，也只是不压缩、照常游玩。
+
+**已知限制**：Bukkit 插件的语音端口自动下发（独立 UDP 端口探测）暂未移植到 Velocity，Velocity 上只有同端口 UDP 透传生效。子服之间切换照常由 Velocity 处理——ZstdNet 位于 Velocity 之前，切服不会被当成新连接。
 
 ## FRP 典型链路
 
@@ -333,6 +373,7 @@ mc.example.com:35565
 5. Zstd 端口是否已被其他程序占用。
 6. 是否有其他模组拦截了登录或握手流程。
 7. 局域网场景下，请优先使用聊天框提示的 Zstd 端口；游戏端口通常可以留空，因为 ZstdNet 会自动跟随本次实际 LAN 端口。
+8. Velocity 群组服：子服上不要装 ZstdNet mod 服务端（或在子服上设 `enabled=false`），否则 Velocity 连子服会被拒绝（子服日志出现 `rejected raw login attempt`，玩家看到「当前服务器启用了 ZSTD 连接…」）。
 
 ### 压缩率接近 100% 是不是没生效？
 
@@ -345,6 +386,10 @@ mc.example.com:35565
 有可能。
 
 如果多人游戏菜单或“对局域网开放”界面被其他模组大幅改写，理论上仍然存在兼容性风险。
+
+### Velocity / 群组服怎么用？
+
+把 `zstdnet-velocity-<版本>.jar` 放进 **Velocity** 的 `plugins/`，放行它生成的 zstd 入口端口（默认 Velocity 端口 + 1，如 25566），让装了客户端 mod 的玩家连这个端口即可；**子服什么都不用装**（也不要装 ZstdNet mod 服务端）。真实 IP、只对 ZstdNet 连接关闭 Velocity 的 zlib 压缩、`online-mode=true` 下的正版验证都会自动处理。详见「[Velocity 代理端（群组服）](#velocity-代理端群组服)」。
 
 ### Simple Voice Chat / Plasmo Voice 这类语音模组能不能用？
 
@@ -675,6 +720,7 @@ CRC 工作在 **ZSTD 之前**：它先把能用令牌 / 增量代替的重复区
 - **大幅扩展版本与平台**
   - 新增 **Forge 1.18.2**、**Forge 1.19.2**、以及 **Minecraft 26.1（26.1.1 / 26.1.2，NeoForge + Fabric，非混淆新时代）**
   - 新增**插件端 / 混合端变体**（Bukkit / Spigot / Paper / Purpur、Arclight / Mohist 等）：一个 jar 跨 1.20.1 与 1.21.x，并**支持 Folia**
+  - 新增 **Velocity 代理端插件**（群组服）：一个 jar 跨 Velocity 3.4 / 3.5 / 4.x，自动还原真实 IP、支持内置正版验证
 - **压缩能力增强（全部 opt-in、默认关闭、对未升级客户端线兼容）**
   - **长距离匹配（LDM）**：面向高重复大结构服务器进一步提压
   - **训练字典 + 零配置自动分发**：`dictionary_auto=true` 一键，自动采样 → 后台训练 → 热插启用 → 下发玩家，无需重启或手动分发

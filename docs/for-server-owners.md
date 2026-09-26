@@ -15,6 +15,7 @@
 | 用 **Paper / Spigot / Purpur** 跑插件的服（有 `plugins` 文件夹，没有 mod 加载器） | 👉 [B. 插件服](#b-插件服paper--spigot--purpur) |
 | **混合端**（Arclight / Mohist / CatServer，既能 mod 又能插件） | 👉 [B. 插件服](#b-插件服paper--spigot--purpur)（推荐用插件版，最省心） |
 | 我只是**单机开房**给朋友玩 | 👉 [C. 单机 / 局域网开房](#c-单机--局域网开房) |
+| 用 **Velocity** 做群组服（一个 Velocity 在前、后面挂多个子服） | 👉 [D. Velocity 群组服](#d-velocity-群组服) |
 
 ---
 
@@ -31,9 +32,9 @@ online-mode=false
 - `online-mode=false`：关闭后端的正版验证（代理转发场景需要）。
 - `network-compression-threshold`：**不用管**，ZstdNet 启动时会自动接管这一项。
 
-> **想要内置正版验证（全部模组加载器已支持：Fabric + Forge + NeoForge，1.18.2 ~ 26.1）**：直接把 `online-mode=true` 即可——ZstdNet 默认 `premium_verification=auto` 会自动开启验证并在运行时把后端切到离线以保住压缩（不改你磁盘上的 `online-mode`），正版玩家保留真实 UUID/皮肤，无需再装 TrueUUID。详见仓库 `PREMIUM_VERIFICATION.md`。
+> **想要内置正版验证（全部模组加载器已支持：Fabric + Forge + NeoForge，1.18.2 ~ 26.3）**：直接把 `online-mode=true` 即可——ZstdNet 默认 `premium_verification=auto` 会自动开启验证并在运行时把后端切到离线以保住压缩（不改你磁盘上的 `online-mode`），正版玩家保留真实 UUID/皮肤，无需再装 TrueUUID。详见仓库 `PREMIUM_VERIFICATION.md`。
 >
-> 若仍想纯离线运行，把 `online-mode=false` 即可（或设 `premium_verification=off`）。**Bukkit/Spigot 插件端**暂不支持内置验证（独立代理无法挂钩 MC 登录），如需保留正版身份可在后端额外搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) 等。
+> 若仍想纯离线运行，把 `online-mode=false` 即可（或设 `premium_verification=off`）。**Bukkit/Spigot 插件端**暂不支持内置验证（独立代理无法挂钩 MC 登录），如需保留正版身份可在后端额外搭配 [TrueUUID](https://www.curseforge.com/minecraft/mc-mods/trueuuid) 等。**Velocity 插件**则支持（见 [D. Velocity 群组服](#d-velocity-群组服)）。
 
 ### 2. 放入服务端 jar
 
@@ -135,6 +136,47 @@ target=127.0.0.1:25565   # 你后端 Minecraft 的真实端口
 
 ---
 
+## D. Velocity 群组服
+
+ZstdNet **只装在 Velocity 上**，子服什么都不用装。模型和 B. 插件服一样——Velocity 照常用自己的端口，插件另开一个 zstd 入口：
+
+```text
+没装 mod 的玩家     ──────────────────────────►  Velocity 25565 ─► 各子服
+装了 ZstdNet 的玩家 ─► ZstdNet 25566 ─(解压)─► 127.0.0.1:25565 Velocity ─► 各子服
+```
+
+### 步骤
+
+1. 把 `zstdnet-velocity-<版本>.jar` 放进 **Velocity** 的 `plugins/` 文件夹，启动。
+   > 同一个 jar 支持 Velocity 3.4 / 3.5（Java 21）和 4.x（Java 25）。
+2. 首次启动生成 `plugins/zstdnet/zstdnet-server.properties`，默认：
+   ```properties
+   enabled=true
+   auto_takeover=false
+   listen=0.0.0.0:25566      # zstd 对外入口（默认 = Velocity 端口 + 1）
+   target=127.0.0.1:25565    # 本机 Velocity 的 bind 端口
+   ```
+   > `velocity.toml` 的 `bind` 若填的是某个具体 IP（不是 `0.0.0.0`），把 `target` 改成那个 IP。
+3. 在防火墙 / 安全组放行 `listen` 端口（这里是 `25566`）。原版玩家继续用 `25565`。
+4. 告诉装了 ZstdNet 客户端的玩家：地址填 `你的IP:25566`。
+
+> **注意：子服上不要装 ZstdNet mod 服务端**：它的 `auto_takeover` 会把子服端口变成只收 ZSTD 的入口，
+> Velocity 连过去会被拒绝（子服日志出现 `rejected raw login attempt`）。确实要装的话，在子服上设 `enabled=false`。
+
+管理指令同 B. 插件服：`/zstdnet status|reload|start|stop`（Velocity 代理端指令，需 `zstdnet.admin` 权限，控制台始终可用）。
+
+### 自动处理，不用改 `velocity.toml`
+
+- **真实 IP**：默认开启，Velocity 和子服都能看到玩家真实 IP；`velocity.toml` 开了 `haproxy-protocol = true` 也兼容。
+- **压缩**：只对经 ZstdNet 进来的连接关掉 Velocity 自带的 zlib 压缩（否则白压）；原版玩家不受影响。
+- **正版验证**：Velocity 设了 `online-mode=true` 时，ZstdNet 连接改用内置正版验证（不走会让压缩失效的加密握手），
+  `premium_verification=auto` 自动跟随 Velocity 的 `online-mode`；直连 Velocity 的原版玩家照常走 Velocity 自己的正版验证。
+
+> 已知限制：B. 插件服那套「语音端口自动下发」暂未移植到 Velocity，Velocity 上只有同端口 UDP 透传生效。
+> 完整说明见仓库根目录 [`README.zh-CN.md`](../README.zh-CN.md) 的「Velocity 代理端（群组服）」一节。
+
+---
+
 ## 想压得更狠？
 
 默认已经在压了。想进一步降流量（字典、面向大量实体/生物的 **transform** 等），见
@@ -146,4 +188,4 @@ target=127.0.0.1:25565   # 你后端 Minecraft 的真实端口
 细节见仓库根目录 [`README.zh-CN.md`](../README.zh-CN.md) 的「真实 IP / FRP PROXY v2 怎么选」一节。
 
 后端那一侧（进服日志、`/ban-ip`、按 IP 风控的插件）默认就能看到真实 IP，无需配置：mod 版由 coremod/mixin
-完成，插件版由 `real_ip_forwarding=true`（默认）完成。只有想彻底关掉时才需要改这一项。
+完成，插件版与 Velocity 插件由 `real_ip_forwarding=true`（默认）完成。只有想彻底关掉时才需要改这一项。

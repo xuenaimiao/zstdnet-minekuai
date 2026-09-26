@@ -17,8 +17,8 @@ commands — read them before changing proxy/config semantics:
 
 ## Repository layout — multi-loader monorepo
 
-This is **not a single Gradle project**. It is nineteen parallel, independent projects
-(eighteen mod variants + one Bukkit/Spigot plugin; each with its own `build.gradle` / `settings.gradle`
+This is **not a single Gradle project**. It is twenty parallel, independent projects
+(eighteen mod variants + one Bukkit/Spigot plugin + one Velocity plugin; each with its own `build.gradle` / `settings.gradle`
 — there is no root settings.gradle), plus a shared **`mods/common`** source-only module that is the
 single source of truth for the loader-agnostic core:
 
@@ -43,6 +43,7 @@ mods/26.2/zstdnet-fabric         Fabric 26.2         JDK 25  (un-obfuscated Loom
 mods/26.3/zstdnet-neoforge       NeoForge 26.3       JDK 25  (NeoForge 26.3.x still beta; ModDevGradle 2.0.147; see §17)
 mods/26.3/zstdnet-fabric         Fabric 26.3         JDK 25  (un-obfuscated Loom; see §17)
 mods/bukkit/zstdnet-bukkit       Bukkit/Spigot/Paper plugin (server-only)  JDK 17 bytecode, version-independent
+mods/velocity/zstdnet-velocity   Velocity proxy plugin (proxy-only)        JDK 17 bytecode (--release 17), velocity-api 3.4.0 → Velocity 3.4/3.5/4.x
 ```
 
 > **MC 26.1+ (the un-obfuscated era)** needs a different toolchain (JDK 25, Gradle 9.x, new Fabric
@@ -70,9 +71,10 @@ The **`mods/bukkit/zstdnet-bukkit`** plugin is server-side only (no mod loader).
 `mods/common` proxy core but, because a plugin loads *after* the MC port is bound, it cannot relocate
 the backend — it runs the proxy on a **separate listen port** (`auto_takeover=false`) and forwards to
 the local MC server. It compiles against Spigot-API (`compileOnly`) + slf4j (`compileOnly`, provided
-by Paper/Spigot at runtime), bundles `zstd-jni` via the `com.gradleup.shadow` fat-jar **relocated** to
-`cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd` (so it can't clash with a host-provided
-zstd-jni, e.g. Mohist's), and targets Java 17 bytecode so one jar runs on both 1.20.1
+by Paper/Spigot at runtime), embeds the original **un-relocated** `zstd-jni` jar as a plain resource
+(`cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar`, loaded at runtime by `core/compress/ZstdCodecs` in an
+isolated `URLClassLoader` so it can't clash with a host-provided zstd-jni, e.g. Mohist's — see the bundling
+notes under "Build"), and targets Java 17 bytecode so one jar runs on both 1.20.1
 (JDK 17) and 1.21.x (JDK 21) servers. It **excludes** `server/DedicatedServerAutoPort.java` from its
 source set (that file is the only common file importing `net.minecraft.*`; the plugin never relocates
 ports). To make that exclusion possible, the MC-free pieces of auto-takeover were split out of
@@ -98,6 +100,30 @@ in `handlerAdded`, so vanilla direct connections cost nothing and can't spoof. G
 `real_ip_forwarding` config key (default `true`, plugin-only — mod variants always do this via coremod/mixin).
 This is why the plugin's `build.gradle` carries `compileOnly` netty (`netty_version` in `gradle.properties`,
 pinned to the oldest supported server's 4.1.82; netty itself is provided by the server at runtime).
+
+The **`mods/velocity/zstdnet-velocity`** plugin runs on the Velocity proxy (backends need nothing) and follows
+the Bukkit model exactly: same `mods/common` source set with the same `DedicatedServerAutoPort.java` exclusion,
+same embedded-resource zstd-jni, `auto_takeover=false`, Velocity keeps its `bind` port for vanilla players and
+the proxy listens on bind port + 1 (config in `plugins/zstdnet/zstdnet-server.properties`), forwarding to
+`127.0.0.1:<bind port>`. It compiles against `velocity-api` 3.4.0 (`compileOnly`, plus `compileOnly` netty
+incl. `netty-codec-haproxy`) with `--release 17`, so one jar loads on Velocity 3.4/3.5 (Java 21) and 4.x
+(Java 25). `velocity-plugin.json` is expanded from a resource template in `processResources` (no Velocity
+annotation processor), like Bukkit's `plugin.yml`. Thin layer: `Zstdnet` (Guice `@Inject` entry;
+`ProxyInitializeEvent`/`ProxyShutdownEvent`), `platform/VelocityPlatform` (`configDir` = `@DataDirectory`),
+`server/ServerProxyBootstrap` (lifecycle, config-watch hot reload, `/zstdnet status|reload|start|stop`
+`SimpleCommand` gated by `zstdnet.admin`), `network/VelocityPipelineInjector` + `network/ZstdnetConnections` +
+`network/RealIpHandshake`, and `auth/VelocityPremiumAuth`. The injector wraps Velocity's
+`ServerChannelInitializerHolder` initializer (the same hook ViaVersion uses; installed from
+`ProxyInitializeEvent` at `PostOrder.FIRST`, because Velocity only reads the child initializer when it binds,
+and FIRST keeps our handler ahead of other wrappers so it sees raw bytes). For ZstdNet connections (the marker is
+only trusted from local peers) it (1) restores the real IP by firing a netty `HAProxyMessage` that Velocity's
+`MinecraftConnection` consumes natively (so it also coexists with `haproxy-protocol = true`), and (2) raises the
+compression encoder threshold so Velocity's zlib is effectively off for those connections only (vanilla players
+keep `compression-threshold`). Premium auth (`premium_verification=auto` follows Velocity's `online-mode`) skips
+Velocity's AES handshake for ZstdNet connections via `PreLoginEvent` `forceOfflineMode`, runs ZstdNet's built-in
+verification over `LoginPhaseConnection#sendLoginPluginMessage`, and applies the verified profile in
+`GameProfileRequestEvent`. Not ported from Bukkit: `VoicePortSync` (only same-port UDP passthrough applies).
+Build with `.\build-velocity.ps1`; `-PbuildSuffix=<name>` gives an isolated build dir for parallel compiles.
 
 All variants share the Java package `cn.tohsaka.factory.zstdnet`. **The loader-agnostic core
 lives once in `mods/common`** — `core/`, `proxy/LocalZstdNet`, `proxy/AndroidZstdNativeLoader`,
@@ -216,11 +242,12 @@ code. Any `.ps1` that mixes Chinese comments with code it must not lose should c
 **All final jars land in one shared directory `../zstdnet-build/dist/`** (not the scattered
 per-variant `mods/<ver>/<variant>/libs/`). Every variant's `build.gradle` redirects its final
 artifact task's `destinationDirectory` there — `jarJar` (Forge 1.18.2/1.19.2/1.20.1 + NeoForge
-1.20.1), `shadowJar` (NeoForge 1.21.1/26.1 + Bukkit), or `remapJar` (Fabric). The filename already
+1.20.1), the plain `jar` (Forge 1.16.5, NeoForge 1.21.1/1.21.11/26.x, Bukkit, Velocity — the variants that
+embed zstd-jni as a resource), or `remapJar` (Fabric, via `base.libsDirectory`). The filename already
 encodes the MC version + loader (`zstdnet-<mc>-<loader>-<mod_version>.jar`, e.g.
-`zstdnet-1.21.1-neoforge-1.4.2-m2.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`), so all
-jars coexist in one folder with no collision. The transient slim/thin/dev jars stay in each variant's
-own `libs/` (and the Forge/NeoForge/Bukkit variants delete theirs after build).
+`zstdnet-1.21.1-neoforge-1.4.2-m2.jar`; Bukkit is `zstdnet-bukkit-<mod_version>.jar`, Velocity is
+`zstdnet-velocity-<mod_version>.jar`), so all jars coexist in one folder with no collision. The transient
+slim/thin/dev jars stay in each variant's own `libs/` (and the jarJar variants delete theirs after build).
 
 PowerShell build scripts at the repo root pick the right JDK and gradle invocation:
 
@@ -239,7 +266,9 @@ PowerShell build scripts at the repo root pick the right JDK and gradle invocati
 .\build-fabric.ps1   -MinecraftVersion 26.2    # Fabric 26.2 (JDK 25, Gradle 9.4.1)
 .\build-fabric.ps1   -MinecraftVersion 26.3    # Fabric 26.3 (JDK 25, Gradle 9.4.1)
 .\build-bukkit.ps1                             # Bukkit/Spigot/Paper plugin (JDK 17, version-independent)
-.\build-all.ps1                                # all 19 variants serially into ../zstdnet-build/dist/
+.\build-velocity.ps1                           # Velocity proxy plugin (JDK 17, Gradle 8.8; Velocity 3.4/3.5/4.x)
+.\build-all.ps1                                # all 20 variants serially into ../zstdnet-build/dist/
+.\build-all.ps1 -Only bukkit,velocity          # only the given keys (e.g. forge-1.20.1, fabric-26.1, velocity)
 ```
 
 To build a single variant manually, set `JAVA_HOME`/`PATH` to the matching JDK and run, from
@@ -249,16 +278,18 @@ the variant's project dir:
 How `zstd-jni` is bundled differs by variant family:
 - **Forge 1.18.2 / 1.19.2 / 1.20.1** (and forge-style `1.20.1-neoforge`): `jarJar` embeds the
   un-relocated `zstd-jni` as a nested jar (a slim jar is built then deleted in favor of the all-in-one).
-- **NeoForge 1.21.1 / 26.1** (ModDevGradle) and the **Bukkit** plugin: `com.gradleup.shadow` flattens
-  `zstd-jni` into the final jar and **relocates** `com.github.luben.zstd` →
-  `cn.tohsaka.factory.zstdnet.shaded.com.github.luben.zstd`, dropping the nested module entirely
-  (`shadowJar` is the artifact, classifier `''`; the slim/thin `jar` is deleted). This is what lets the
-  jar run on hosts that ship their own zstd-jni — e.g. **Mohist injects `zstd-jni` into the boot module
-  layer**, and an un-relocated bundle would crash with JPMS *"reads more than one module named
-  com.github.luben.zstd_jni"*. Relocation is **native-safe**: zstd-jni's native libs live at the **jar
-  root** (`linux/amd64/…`, `win/amd64/…`, not under the package) and load by absolute classpath path +
-  `os.name`/`os.arch`, none of which a package rename touches. (The remaining Forge variants would hit
-  the same Mohist clash; relocating them means staging shadow *before* ForgeGradle's `reobf` — not yet done.)
+- **NeoForge 1.21.1 / 1.21.11 / 26.x** (ModDevGradle), **Forge 1.16.5**, and the **Bukkit** and
+  **Velocity** plugins: an `embeddedZstd` configuration + `stageEmbeddedZstd` task copy the original,
+  **un-relocated** zstd-jni jar into the final jar as a plain resource
+  `cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar` (not on the classpath / module path; the plain `jar` is
+  the artifact, classifier `''`, no shadow). At runtime `core/compress/ZstdCodecs` first reuses a host-provided
+  `com.github.luben.zstd` if one is visible, and only otherwise extracts the embedded jar and loads it in an
+  **isolated `URLClassLoader`**. This keeps the jar working on hosts that ship their own zstd-jni — e.g.
+  **Mohist injects `zstd-jni` into the boot module layer**, and a nested/flattened bundle would crash with JPMS
+  *"reads more than one module named com.github.luben.zstd_jni"*. The earlier approach (shadow **relocation**
+  to `cn.tohsaka.factory.zstdnet.shaded.…`) was dropped because it breaks JNI: the native symbol names are
+  compiled against the original package, so relocated classes fail with `UnsatisfiedLinkError`. (The
+  remaining jarJar Forge variants would still hit the Mohist clash.)
 
 The mod version is in each variant's `gradle.properties` (`mod_version`).
 

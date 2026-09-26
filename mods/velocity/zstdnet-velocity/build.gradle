@@ -1,0 +1,124 @@
+plugins {
+    id 'java'
+    id 'eclipse'
+    id 'idea'
+}
+
+version = mod_version
+group = mod_group_id
+
+// 共享核心源码：单一真源在 mods/common，被所有变体作为额外源根编译。
+// DedicatedServerAutoPort 依赖 net.minecraft.server.dedicated.*（代理端没有、也用不到——auto_takeover 恒为 false），
+// 故从源集中排除；其拆出的 MC 无关部分 AutoPortPlan / DedicatedAutoPortState 仍参与编译（与 Bukkit 插件同理）。
+sourceSets {
+    main {
+        java {
+            srcDir '../../common/src/main/java'
+            exclude 'cn/tohsaka/factory/zstdnet/server/DedicatedServerAutoPort.java'
+        }
+        resources.srcDir '../../common/src/main/resources'
+    }
+    test {
+        java.srcDir '../../common/src/test/java'
+    }
+}
+
+def externalBuildRoot = new File(projectDir, '../../../../zstdnet-build').canonicalFile
+// 可选 -PbuildSuffix=<name>：给并行的编译/测试各自一个独立构建目录，避免互相抢同一个 build 目录的锁。
+def buildSuffix = project.findProperty('buildSuffix')
+def externalProjectBuildDir = new File(externalBuildRoot,
+    'mods/velocity/zstdnet-velocity' + (buildSuffix ? '-' + buildSuffix : '')).canonicalFile
+
+layout.buildDirectory.set(externalProjectBuildDir)
+
+base {
+    archivesName = 'zstdnet-velocity'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+// 内嵌的 zstd-jni 以「普通资源 jar」放进最终 jar（见下方 stageEmbeddedZstd），不进 classpath、不重定位。
+// transitive=false：zstd-jni 无运行期传递依赖，只取它自身这一个 jar。
+configurations {
+    embeddedZstd { transitive = false }
+}
+
+dependencies {
+    // Velocity API（含 Guice / Adventure / slf4j 等传递依赖）由代理运行时提供，仅编译期依赖。
+    // 不启用其注解处理器：velocity-plugin.json 由 processResources 从模板展开（见 src/main/resources），
+    // 与 Bukkit 的 plugin.yml 同一套做法，避免处理器依赖链进构建。
+    compileOnly "com.velocitypowered:velocity-api:${velocity_api_version}"
+    // 真实 IP 还原 / 压缩阈值调整要在 Velocity 的 netty 管线上挂处理器。netty 由 Velocity 自带，仅编译期依赖。
+    compileOnly "io.netty:netty-buffer:${netty_version}"
+    compileOnly "io.netty:netty-transport:${netty_version}"
+    compileOnly "io.netty:netty-codec:${netty_version}"
+    compileOnly "io.netty:netty-codec-haproxy:${netty_version}"
+    // common 核心用 slf4j 记日志；Velocity 运行时自带 slf4j-api，故仅编译期依赖、不打包。
+    compileOnly 'org.slf4j:slf4j-api:2.0.9'
+    // 编译期 + test 运行期用原包名 com.github.luben.zstd（test 下宿主即有 zstd，门面走宿主模式）；
+    // 生产 jar 不含这些类，仅内嵌资源 jar 作 fallback（与 Bukkit 插件相同）。
+    implementation "com.github.luben:zstd-jni:${zstd_version}"
+    // ★ 内嵌进最终 jar 的那份原始 zstd-jni（不重定位，保留 com.github.luben.zstd，原生方法才能绑定）。
+    embeddedZstd "com.github.luben:zstd-jni:${zstd_version}"
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.slf4j:slf4j-api:2.0.9'
+    testImplementation "io.netty:netty-buffer:${netty_version}"
+    testImplementation "io.netty:netty-transport:${netty_version}"
+    testImplementation "io.netty:netty-codec:${netty_version}"
+    testImplementation "io.netty:netty-codec-haproxy:${netty_version}"
+    testImplementation "com.velocitypowered:velocity-api:${velocity_api_version}"
+}
+
+// 把原始 zstd-jni jar 暂存成资源：cn/tohsaka/factory/zstdnet/embedded/zstd-jni.jar。
+// 运行时 ZstdCodecs 在宿主无 zstd 时解压它、用隔离 URLClassLoader 加载（包名不变→原生方法可绑定，
+// 又不进入宿主类加载器命名空间→不与宿主自带的 zstd-jni 撞类）。
+def embeddedZstdDir = layout.buildDirectory.dir('generated/embeddedZstd')
+def stageEmbeddedZstd = tasks.register('stageEmbeddedZstd', Copy) {
+    from configurations.embeddedZstd
+    into embeddedZstdDir.map { it.dir('cn/tohsaka/factory/zstdnet/embedded') }
+    rename '.*', 'zstd-jni.jar'
+}
+sourceSets.main.resources.srcDir(embeddedZstdDir)
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    // 显式固定 --release 17：velocity-api 3.4.0 本身即 Java 17 字节码，产物可在 JDK 17/21/25 的 Velocity 上加载。
+    options.release = 17
+}
+
+test {
+    useJUnitPlatform()
+}
+
+processResources {
+    dependsOn stageEmbeddedZstd
+
+    // expand 默认按平台字符集读文件，Windows 上会破坏非 ASCII；锁定 UTF-8。
+    filteringCharset = 'UTF-8'
+
+    def replaceProperties = [
+        mod_id     : mod_id,
+        mod_name   : mod_name,
+        mod_version: mod_version
+    ]
+    inputs.properties(replaceProperties)
+
+    filesMatching('velocity-plugin.json') {
+        expand replaceProperties
+    }
+}
+
+// 最终发布产物就是普通插件 jar：只打包插件自身的类 + 资源（含上面内嵌的 zstd-jni.jar 资源）。
+jar {
+    archiveClassifier = ''
+    // 最终发布产物统一输出到外部构建根的 dist/ 单一目录（文件名已含平台，可区分）。
+    destinationDirectory.set(new File(externalBuildRoot, 'dist').canonicalFile)
+}

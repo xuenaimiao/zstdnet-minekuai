@@ -1,0 +1,10 @@
+{
+  "id": "${mod_id}",
+  "name": "${mod_name}",
+  "version": "${mod_version}",
+  "description": "Transparent ZSTD compression proxy in front of a Velocity proxy (minekuai.com).",
+  "url": "https://minekuai.com",
+  "authors": ["wish", "xuenai"],
+  "dependencies": [],
+  "main": "cn.tohsaka.factory.zstdnet.Zstdnet"
+}
