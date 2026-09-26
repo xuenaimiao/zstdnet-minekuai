@@ -91,8 +91,9 @@ public final class ClientProxyPublisher {
     private static final int MIN_PORT = 1024;
     private static final int MAX_PORT = 65535;
     private static final int DEFAULT_BACKEND_PORT = 25566;
-    private static final int PORT_TEXT_NORMAL = 14737632;
-    private static final int PORT_TEXT_INVALID = 16733525;
+    // ARGB，alpha 必须写满：1.21.6 起文字渲染不再自动补 alpha，0x00E0E0E0 这类旧写法会画成完全透明（端口框看着是空的）。
+    private static final int PORT_TEXT_NORMAL = 0xFFE0E0E0;
+    private static final int PORT_TEXT_INVALID = 0xFFFF5555;
     private static final int HUD_SERVER_BACKGROUND = 0x90241208;
     private static final int HUD_SERVER_TITLE = 0xFFE1A3;
     private static final int HUD_SERVER_TEXT = 0xFFD08A;
