@@ -1,4 +1,4 @@
-# build-all.ps1 - Build all 17 ZstdNet variants in one pass into ../zstdnet-build/dist/
+# build-all.ps1 - Build all 19 ZstdNet variants in one pass into ../zstdnet-build/dist/
 #
 # What this does that the per-loader build-*.ps1 scripts do not:
 #   Runs every variant serially, never aborts on a single failure, prints a summary
@@ -8,7 +8,7 @@
 # $env:ZSTDNET_JDK8 / ZSTDNET_JDK17 / ZSTDNET_JDK21 / ZSTDNET_JDK25).
 #
 # Usage:
-#   .\build-all.ps1                                 # all 17
+#   .\build-all.ps1                                 # all 19
 #   .\build-all.ps1 -Only bukkit                    # only the given key(s)
 #   .\build-all.ps1 -Only forge-1.20.1,fabric-26.1
 #   .\build-all.ps1 -DryRun                         # plan only, do not build
@@ -59,6 +59,8 @@ $variants = @(
     @{ key='fabric-26.1';     proj='mods\26.1\zstdnet-fabric';     jdk='25'; gradle='9.4.1'; cache='zstdnet-fabric-26.1' }
     @{ key='neoforge-26.2';   proj='mods\26.2\zstdnet-neoforge';   jdk='25'; gradle='9.4.1'; cache='zstdnet-neoforge-26.2' }
     @{ key='fabric-26.2';     proj='mods\26.2\zstdnet-fabric';     jdk='25'; gradle='9.4.1'; cache='zstdnet-fabric-26.2' }
+    @{ key='neoforge-26.3';   proj='mods\26.3\zstdnet-neoforge';   jdk='25'; gradle='9.4.1'; cache='zstdnet-neoforge-26.3' }
+    @{ key='fabric-26.3';     proj='mods\26.3\zstdnet-fabric';     jdk='25'; gradle='9.4.1'; cache='zstdnet-fabric-26.3' }
     @{ key='bukkit';          proj='mods\bukkit\zstdnet-bukkit';   jdk='17'; gradle='8.8';   cache='zstdnet-bukkit' }
 )
 

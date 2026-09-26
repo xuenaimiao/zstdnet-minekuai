@@ -51,6 +51,8 @@ mods/26.1/zstdnet-neoforge       NeoForge 26.1     JDK 25   coremods  (un-obfusc
 mods/26.1/zstdnet-fabric         Fabric 26.1       JDK 25   mixins    (un-obfuscated; see §10)
 mods/26.2/zstdnet-neoforge       NeoForge 26.2     JDK 25   coremods  (see §14)
 mods/26.2/zstdnet-fabric         Fabric 26.2       JDK 25   mixins    (see §14)
+mods/26.3/zstdnet-neoforge       NeoForge 26.3     JDK 25   mixins    (see §17)
+mods/26.3/zstdnet-fabric         Fabric 26.3       JDK 25   mixins    (see §17)
 ```
 
 ---
@@ -688,3 +690,98 @@ fabric-api 的网络 API 也没动（`CustomPayload` 重构是 1.20.5）。
 专用服上那两条 `@Mixin target … ContainerEventHandler/Screen … not found in environment type SERVER` WARN
 是预期的（客户端专属 mixin 挂在 common 段），无害。**尚未点进游戏内 GUI 实测**（多人游戏列表 / 开放局域网 /
 TAB 头像）与端到端连服压缩。
+
+## 17. Minecraft 26.3 (NeoForge + Fabric) — 26.2 → 26.3 的增量（LAN 界面再次合并 + 输入层换 SDL3）
+
+Reference variants: `mods/26.3/zstdnet-neoforge` + `mods/26.3/zstdnet-fabric`（模板 = 对应的 `mods/26.2/*`）。
+26.3 于 2026-09-15 发布（protocol 777，`java_version` 25）。`mods/common` 一行未改；只动了薄层 + 构建配置。
+
+**Pinned versions (26.3):** `minecraft_version=26.3`；NeoForge `neo_version=26.3.0.22-beta`（26.3.x 整条线仍是 **beta**），
+**ModDevGradle `2.0.147`**；Fabric `loader_version=0.19.5`（编译用）+ **`loader_min_version=0.19.3`**（对玩家声明的下限，
+= fabric-api 自身声明的下限），`fabric_api_version=0.161.0+26.3`，`loom_version=1.16.3`（照旧可用）。Gradle 9.4.1、JDK 25、
+zstd-jni `1.5.7-7` 均不变。元数据：`neoforge.mods.toml` minecraft `versionRange="[26.3,26.4)"`；`fabric.mod.json`
+`"minecraft": ">=26.3 <26.4"`。
+
+> ★ **ModDevGradle 必须升到 2.0.147**（仅 26.3 变体；其余变体不动）。沿用 26.2 的 2.0.141 时，`createMinecraftArtifacts`
+> 在 NeoForm 的 `recompile` 步骤失败（`HolderSet$1.contents()` 覆盖 `HolderSet.Named.contents()` 时「分配了更低的访问权限」
+> 这类 javac 错误）——是 2.0.141 自带的 NeoFormRuntime 太旧，与我方代码无关；2.0.147（带更新的 NeoFormRuntime）即可通过。
+> 另：**别同时并行构建两个 26.x 变体**，Vineflower 反编译会 OOM（`Vineflower ran out of memory during decompilation`）。
+
+**Vanilla / 加载器 API 增量（26.2 → 26.3）**——均已对 `minecraft-merged-deobf-26.3.jar` 用 `javap` 核对：
+
+| 26.2 | 26.3 | 影响 |
+|---|---|---|
+| `net.minecraft.client.gui.screens.MultiplayerOptionsScreen` | `net.minecraft.client.gui.screens.WorldOptionsScreen` | 「开放到局域网」界面与旧 `options/WorldOptionsScreen` **合并**成一个「世界选项」界面（通用选项 + 多人选项放进 `ScrollableLayout`）；仍有 `EditBox portEdit`、仍调用 `IntegratedServer.publishServer`。薄层所有 `MultiplayerOptionsScreen` 类型换成 `WorldOptionsScreen`；LAN Zstd 端口框改由新的 `mixin/WorldOptionsScreenMixin`（两个加载器各一份）驱动，见下文「LAN Zstd 端口框」。 |
+| `MultiplayerOptionsScreen` 覆写 `extractBackground(GuiGraphicsExtractor,IIF)V` | `WorldOptionsScreen` 覆写 `extractRenderState(GuiGraphicsExtractor,IIF)V`（+ `extractMenuBackground(GuiGraphicsExtractor)`），**不再**覆写 `extractBackground` | 注入只能落在目标类自己声明的方法上，照搬 26.2 对 `extractBackground` 的注入在 required 配置下直接崩。26.3 已不再注入渲染方法：旧 `ShareToLanScreenMixin` 整个删除，由 `WorldOptionsScreenMixin` 取代（标签用原版 `StringWidget` 进布局，不再自绘）。 |
+| 输入层 **GLFW** | 输入层 **SDL3** | `KeyEvent(int key, int keycode, int modifiers)`：`key()` 现为 **SDL 物理扫描码**。`InputConstants.KEY_RETURN` 257→**40**、`KEY_NUMPADENTER` 335→**88**、`KEY_SPACE` 32→**44**、`KEY_ESCAPE` 256→41。薄层里写死的 `257`/`335` **能编译、但永远匹配不上**（ENTER 拦截静默失效）。一律改用 `InputConstants.KEY_*` 常量（编译期内联成当前版本的值）或 `InputWithModifiers.isConfirmation()`/`isSelection()`。 |
+| NeoForge `ScreenEvent.KeyPressed#getKeyCode()` | 已删除（改为 `getKey()` = SDL 扫描码、`getKeycode()` = SDL 虚拟键码） | NeoForge `ClientProxyPublisher` 改用 `event.getKeyEvent().isConfirmation()`，不写任何数字。 |
+| `JoinMultiplayerScreen.selectButton` | `joinButton` | 我方按按钮文字 `selectServer.select` 匹配（26.3 仍用这个 key），不受影响。 |
+| `MinecraftServer.publishServer(MultiplayerScope, GameType, boolean, int)` | `publishServer(MultiplayerScope, boolean, int)` | 薄层与 common 都不直接调用，无需改。 |
+
+**★ Fabric 专用服启动即崩的坑（mixin 兼容等级）。** 从 26.2 复制来的 `zstdnet.mixins.json` 把 `ContainerEventHandlerMixin`、
+`ScreenMixin` 放在公共 `"mixins"` 段。以前在专用服上这只是一条无害 WARN（见 §12/§16），但 26.3 首次 `runServer` 直接
+`InvalidMixinException: @Mixin target …ContainerEventHandler was not found` → `Mixin transformation of net.minecraft.server.Main failed`。
+根因链（已反编译确认）：Fabric Loader 按**本 mod 声明的 `fabricloader` 下限**给 mixin 配置打 `fabric-compat` 等级
+（`FabricMixinVersions`：下限 ≥0.19.4 → 17004）；sponge-mixin **0.17.4**（loader 0.19.5 自带）在 `handleTargetError` 里，
+当 compat ≥ 17004 **且** 配置 `required` 时把「目标类找不到」从 WARN 升级为抛错。26.3 起初写的是 `>=${loader_version}`=0.19.5，
+正好踩线。修法两处：(1) 这两个客户端专属 mixin 挪进 `"client"` 段（根治）；(2) 按 1.21.11 的先例新增 `loader_min_version=0.19.3`。
+其余 7 个 Fabric 变体（1.19.3 / 1.20.1 / 1.20.4 / 1.21.1 / 1.21.11 / 26.1 / 26.2）声明的下限都 ≤0.19.3（compat ≤17001），
+原本只是 WARN，但为了以后抬 loader 下限时不再踩雷，**这两个 mixin 在所有 Fabric 变体里都已挪进 `"client"` 段**（纯配置改动，
+客户端行为不变；专用服上从此连那两条 WARN 都没有）。
+
+**Files edited（其余逐字照抄 26.2）：**
+- **Fabric:** `client/ClientProxyPublisher`（`isActivationKey` 用 `InputConstants.KEY_NUMPADENTER`，新增 `isConfirmationKey` 替换两处
+  `257/335`；旧的按文字找按钮/按坐标摆框/截鼠标 ENTER 的整套 LAN 代码删掉，换成下文四个 `onWorldOptions*` 钩子）；新增
+  `mixin/WorldOptionsScreenMixin` + `client/WorldOptionsLanAccess`，删除 `mixin/ShareToLanScreenMixin`；`mixin/ContainerEventHandlerMixin` +
+  `mixin/ScreenMixin` 去掉「世界选项」分支；`zstdnet.mixins.json`（这两个挪进 `"client"`，`ShareToLanScreenMixin`→`WorldOptionsScreenMixin`）；
+  `fabric.mod.json` + `build.gradle` + `gradle.properties`（`loader_min_version`）。
+- **NeoForge:** `client/ClientProxyPublisher`（`DirectJoin` 的 `getKeyCode()!=257/335` → `!getKeyEvent().isConfirmation()`；旧的基于 `ScreenEvent`
+  的 LAN 代码与 `Render.Pre/Post` 监听删掉，换成同样四个 `onWorldOptions*` 钩子）；新增 `mixin/WorldOptionsScreenMixin`（`"client"` 段）+
+  `client/WorldOptionsLanAccess`；`build.gradle`（MDG 2.0.147）。**原有 9 个 mixin 全部原样**：`MinecraftServer#getCompressionThreshold`、`DedicatedServer#initServer`
+  （`DedicatedServerProperties` 局部变量仍在 slot 2，只有一处 STORE）、`ClientIntentionPacket(FriendlyByteBuf)` 里的 `readUtf(I)`（仍只一处）、
+  `ServerHandshakePacketListenerImpl#handleIntention`、`Connection#getRemoteAddress`、`ServerLoginPacketListenerImpl` 的
+  `tick`/`verifyLoginAndFinishConnectionSetup(GameProfile)`/`handleCustomQueryPacket`、`ClientHandshakePacketListenerImpl#handleCustomQuery`、
+  `ConnectScreen#startConnecting`（6 参不变）、`PlayerTabOverlay#extractRenderState` 里的 `ClientPacketListener#onlineMode()`（仍只一处）。
+
+**LAN Zstd 端口框（26.3 重做，两个加载器同一套）：** 旧实现靠按钮文字 `lanServer.start` 找「开始」按钮、按坐标把输入框摆在端口框旁边、
+在 Screen 头部截鼠标/ENTER 先写配置——但 26.2 的 `MultiplayerOptionsScreen` 与 26.3 的 `WorldOptionsScreen` 都**不再用这个 key**
+（按钮是 `menu.multiplayerOptions.applyChanges`），26.3 的端口框还藏进了 `ScrollableLayout`，所以旧实现在 26.2/26.3 上整段落空
+（`compress_lan=true` 也看不到 Zstd 端口框）。26.3 改为 `WorldOptionsScreenMixin` 挂在原版自己的流程上（均对照 26.3 反编译源码核对）：
+
+| 注入点 | 作用 |
+|---|---|
+| `multiplayerOptions(LinearLayout, IntegratedServer)` 内、`updatePortControlsState()` 调用前（MixinExtras `@Local GridLayout.RowHelper`） | 原版端口框刚加进两列网格，紧接着加「Zstd 端口」`StringWidget` + `EditBox` 占下一整行。进的是原版布局：`ScrollableLayout.arrangeElements()` 会重新收集子控件，滚动/缩放/Tab 焦点/渲染全由原版负责 |
+| `updatePortControlsState()` TAIL | 随原版端口框一起启用/禁用（局域网开关关着时灰掉） |
+| `hasChanges()` RETURN | Zstd 端口无效（越界 / 被占用 / 与游戏端口相同）时让「应用更改」保持禁用——与原版端口无效同样处理，不再拦截点击 |
+| `publish(IntegratedServer, MultiplayerScope)` HEAD（仅 LAN） | 用原版最终选定的 `this.port`（端口框留空时由原版自动挑）作后端，把 Zstd 端口一起写进 zstdnet-server.properties；随后服务端 tick 按 `lan_compression` 拉起局域网 zstd 代理 |
+
+薄层通过鸭子接口 `WorldOptionsLanAccess`（mixin 织入：`zstdnet$lanPort()` / `zstdnet$refreshApplyChanges()`）读原版端口、刷新按钮状态。
+不再拦截该界面的 ENTER/鼠标：「世界选项」把整套世界设置放在一起，在头部截 ENTER 会劫持焦点所在开关/按钮的键盘操作。
+状态表不在 `Screen#removed()` 时清理（原版「锁定难度」确认弹窗会先 removed 本界面，点「是」后才在原实例上 applyChanges → publish），
+由 `WeakHashMap` 随界面回收。已发布后再次打开：正在运行的局域网代理占着的端口视为自己的、不算被占用。
+**26.2 仍是旧实现**（Zstd 端口框在 26.2 上不会出现，用 `/zstdport`）；26.2 若要同样修，思路一致，但 `MultiplayerOptionsScreen`
+没有 `hasChanges()`，校验需挂到 `updateApplyChangesActiveState()` 上。
+
+**Build:** `.\build-neoforge.ps1 -MinecraftVersion 26.3` / `.\build-fabric.ps1 -MinecraftVersion 26.3`（均 JDK 25 + Gradle 9.4.1）。
+已接入 `build-all.ps1`、`scripts/run-regression.ps1`。
+
+**★ 端口框文字透明（1.21.6+ 通病，已一并修）：** `PORT_TEXT_NORMAL/INVALID` 原是 `14737632`/`16733525`（`0x00E0E0E0`/`0x00FF5555`，
+alpha=0）。1.21.6 起文字渲染不再自动补 alpha，这类颜色画出来完全透明——Zstd 端口框看着是个空黑框（值其实在，所以连提示语也不显示）。
+26.3 实测时暴露，已在 1.21.11 / 26.1 / 26.2 / 26.3 两个加载器里统一改成 `0xFFE0E0E0` / `0xFFFF5555`（更老的版本 `Font` 会自动补 alpha，不受影响）。
+
+**★ Fabric 开发运行在 26.3 上随机崩在 `jvm.dll`（与 mod 无关）：** 26.3 的官方启动清单新增 JVM 参数 `-XX:StackShadowPages=32`
+（26.2 没有；SDL3 输入层的原生回调栈更深）。官方启动器、NeoForge 的 MDG 都会带上，Loom 1.16.3 的 `runClient` 不会——缺了它客户端会在
+任意时刻以 `0xC0000005`（faulting module `jvm.dll`，连 `hs_err` 都写不出来）退出。已在 26.3 Fabric 的 `loom.runs.configureEach` 里补
+`vmArg '-XX:StackShadowPages=32'`，只影响本地开发运行。另外 MDG 的 `runClient --args=…` 会**替换**（不是追加）它生成的参数文件，
+要给 NeoForge 开发客户端加 `--quickPlay…` 之类参数得改 `neoForge.runs.client.programArguments`。
+
+**Status:** 两个变体 `build` 绿（`compileJava` + 共享单测 + dist jar）。**实测（2026-09-26）：**
+- 专用服（`runServer`，offline，两边）：`auto takeover armed` → 后端改绑、阈值强制 1048576、UDP 路由、`started: mode=dedicated`；
+  脚本探测经 ZSTD 入口的 status ping 透传、直连后端的离线登录走完登录监听器，**0 条 mixin 警告/错误**。
+- 客户端联机（两边，经局域网 IP 连同版本专用服）：探测 `-> ZSTD` → `ConnectScreenMixin` 接管 → 握手 `mode=ZSTD` → 服务端真实 IP 还原 →
+  进服正常。注意 `127.0.0.1`/`localhost` 目标按设计**永不接管**（防止接管本地代理自己），私网 IP 需 `compress_lan=true`；
+  用 127.0.0.1 测会被 ZSTD 入口以「请用 ZSTD 客户端」踢回——这是正确行为。
+- 单人开局域网（Fabric）：「世界选项」里 Zstd Port 行出现在「LAN | 端口」正下方、显示配置端口 `25635`；开 LAN 后「应用更改」→
+  `publish` 钩子写入 `listen=25635 → target=<原版自动挑的端口>` → `LAN world published …, zstd proxy armed`。NeoForge 用同一套 mixin/钩子，
+  其局域网界面未单独点测。
+- 服务端每次被客户端探测会留一条 `pipe error … ZstdIOException: Truncated source`：`ZstdProbe` 只发握手就断开，属预期噪音，与 26.3 无关。

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('1.19.3', '1.20.1', '1.20.4', '1.21.1', '1.21.11', '26.1', '26.2')]
+    [ValidateSet('1.19.3', '1.20.1', '1.20.4', '1.21.1', '1.21.11', '26.1', '26.2', '26.3')]
     [string]$MinecraftVersion = '1.21.1'
 )
 
@@ -25,6 +25,7 @@ switch ($MinecraftVersion) {
     '1.21.11' { $jdk = 21; $gradleDir = 'tools\gradle-9.4.1' }
     '26.1'   { $jdk = 25; $gradleDir = 'tools\gradle-9.4.1' }
     '26.2'   { $jdk = 25; $gradleDir = 'tools\gradle-9.4.1' }
+    '26.3'   { $jdk = 25; $gradleDir = 'tools\gradle-9.4.1' }
     default  { throw "Unsupported Fabric target: $MinecraftVersion" }
 }
 $javaHome = Resolve-ZstdnetJdk $jdk

@@ -1,0 +1,41 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="CC-BY-NC-SA-4.0"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+displayTest="IGNORE_SERVER_VERSION"
+description='''
+ZstdNet is a Minecraft Java Edition mod that compresses relayed traffic between clients and servers through a local or server-side ZSTD proxy, with the goal of significantly reducing public bandwidth usage in high-repetition data scenarios.
+It supports automatic dedicated-server port takeover, LAN host publishing, raw vanilla passthrough compatibility, and forwarded real-IP restoration.
+'''
+
+[features.${mod_id}]
+javaVersion="[25,)"
+
+[[dependencies.${mod_id}]]
+modId="neoforge"
+type="required"
+versionRange="[${neo_version},)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+type="required"
+versionRange="[26.3,26.4)"
+ordering="NONE"
+side="BOTH"
+
+# 计时/拦截挂钩走 Mixin。
+#
+# 历史：这里原本是 JS coremod（META-INF/coremods.json + coremods/*.js）。
+# NeoForge 已经把 JS coremod 整套删掉 —— net.neoforged:coremods（里面才有 ASMAPI）
+# 最后一次出现在 NeoForge 21.1.x 的依赖里，21.11 / 26.1 / 26.2 都不再带它。
+# 关键在于它是静默忽略的：mods.toml 照常解析、mod 照常加载、日志里一个字都没有，
+# 只有所有注入全部没装上：自动端口接管、真实 IP 转发、登录阶段正版验证、
+# LAN 压缩阈值、TAB 头像门控 —— 全部失效。
+[[mixins]]
+config="zstdnet.mixins.json"
