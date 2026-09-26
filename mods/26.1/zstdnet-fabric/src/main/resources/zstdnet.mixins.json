@@ -4,17 +4,17 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [
     "ConnectionMixin",
-    "ContainerEventHandlerMixin",
     "ClientIntentionPacketMixin",
     "DedicatedServerMixin",
     "MinecraftServerMixin",
-    "ScreenMixin",
     "ServerHandshakePacketListenerImplMixin",
     "ServerGamePacketListenerImplAccessor",
     "ServerLoginPacketListenerImplAccessor",
     "PremiumAuthServerLoginMixin"
   ],
   "client": [
+    "ContainerEventHandlerMixin",
+    "ScreenMixin",
     "ConnectScreenMixin",
     "DirectJoinServerScreenMixin",
     "JoinMultiplayerScreenMixin",
