@@ -75,6 +75,15 @@ public final class ServerProxyConfigFile {
         "max_req_per_window",
         "request_window",
         "ban_duration",
+        "ban_permanent_after",
+        "max_global_conn",
+        "max_global_req_per_window",
+        "max_login_per_window",
+        "lockdown_duration",
+        "lockdown_login_interval",
+        "flood_bypass_ips",
+        "flash_session",
+        "handshake_timeout",
         "stats_interval",
         "flush_interval",
         "idle_timeout",
@@ -372,6 +381,15 @@ public final class ServerProxyConfigFile {
         props.putIfAbsent("max_req_per_window", "50");
         props.putIfAbsent("request_window", "10s");
         props.putIfAbsent("ban_duration", "1m");
+        props.putIfAbsent("ban_permanent_after", "0");
+        props.putIfAbsent("max_global_conn", "0");
+        props.putIfAbsent("max_global_req_per_window", "0");
+        props.putIfAbsent("max_login_per_window", "0");
+        props.putIfAbsent("lockdown_duration", "20s");
+        props.putIfAbsent("lockdown_login_interval", "2s");
+        props.putIfAbsent("flood_bypass_ips", "");
+        props.putIfAbsent("flash_session", "0");
+        props.putIfAbsent("handshake_timeout", "0");
         props.putIfAbsent("stats_interval", "0s");
         props.putIfAbsent("flush_interval", "2ms");
         props.putIfAbsent("idle_timeout", "0");
@@ -628,6 +646,42 @@ public final class ServerProxyConfigFile {
 
         appendLine(builder, "# 超限后的封禁时长。", lineSeparator);
         appendLine(builder, "ban_duration=" + props.getProperty("ban_duration"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 全局同时连接上限。0 表示不限制。分布式假人换 IP 时，单 IP 限制拦不住，靠这项封顶。", lineSeparator);
+        appendLine(builder, "max_global_conn=" + props.getProperty("max_global_conn"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 全服在 request_window 内允许的新连接次数。0 表示不限制。超限会进入登录 lockdown，不直接掐断 TCP。", lineSeparator);
+        appendLine(builder, "max_global_req_per_window=" + props.getProperty("max_global_req_per_window"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 全服在 request_window 内允许的新登录（进服握手，不含 MOTD ping）次数。0 表示不限制。", lineSeparator);
+        appendLine(builder, "max_login_per_window=" + props.getProperty("max_login_per_window"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 登录洪峰触发后，限制新登录的时长。状态 ping / MOTD 仍可通行。同一 IP 再进一次会放行。", lineSeparator);
+        appendLine(builder, "lockdown_duration=" + props.getProperty("lockdown_duration"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# lockdown 期间，同一 IP 第一次被拒绝后，至少再等这么久，下一次连接才放行。0 表示第二次立刻放行。", lineSeparator);
+        appendLine(builder, "lockdown_login_interval=" + props.getProperty("lockdown_login_interval"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 不受连接数和登录限速影响的 IP，逗号分隔。留空表示没有。", lineSeparator);
+        appendLine(builder, "flood_bypass_ips=" + props.getProperty("flood_bypass_ips"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 进世界后多久内断开，就按 ban_duration 封这个 IP。用来挡住反复进入又秒退。0 表示关闭。", lineSeparator);
+        appendLine(builder, "flash_session=" + props.getProperty("flash_session"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 同一 IP 累计封禁几次后直到重启都不再放行。第一次用 ban_duration，之后 5 倍、20 倍，到次数后一直封到重启。0 表示不升级。", lineSeparator);
+        appendLine(builder, "ban_permanent_after=" + props.getProperty("ban_permanent_after"), lineSeparator);
+        appendLine(builder, "", lineSeparator);
+
+        appendLine(builder, "# 入口握手读超时。0 表示不额外限制。攻击时建议 15s-20s，过短会让真人看到连接中断。", lineSeparator);
+        appendLine(builder, "handshake_timeout=" + props.getProperty("handshake_timeout"), lineSeparator);
         appendLine(builder, "", lineSeparator);
 
         appendLine(builder, "# 运行时统计日志输出间隔。0 表示关闭周期统计。", lineSeparator);

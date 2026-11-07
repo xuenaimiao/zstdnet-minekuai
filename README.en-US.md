@@ -495,6 +495,30 @@ Notes:
 - `ban_duration`：Ban duration after exceeding limits (default: 1m)
   - Prevents malicious attacks, banned IPs can't connect temporarily
 
+- `max_global_conn`：Global concurrent connection cap (default: 0, unlimited)
+  - Stops distributed bot floods that rotate IPs and bypass per-IP limits
+  - A practical starting point is `max-players` plus headroom (e.g. 160 on a 100-player server)
+
+- `max_global_req_per_window`：Global new-connection budget inside `request_window` (default: 0, unlimited)
+  - Exceeding it enters login lockdown. Extra TCP is kept open so clients get a retry message instead of a silent reset
+
+- `max_login_per_window`：Global new-login budget inside `request_window` (default: 0, unlimited)
+  - Counts join handshakes only, not MOTD / status pings
+  - Exceeding it enters lockdown: the first login from an IP is told to reconnect immediately, and the second try from that same IP is allowed once. One-shot rotating IPs stay out. Online players stay connected
+
+- `lockdown_duration`：How long new logins are limited after a login flood (default: 20s)
+
+- `lockdown_login_interval`：After lockdown rejects an IP, the next connection from that IP is allowed only once this interval has passed (default: 2s; 0 allows the second connection immediately). An immediate double-connect does not enter the world
+
+- `flood_bypass_ips`：Comma-separated IPs that skip connection and login limits (default: empty)
+
+- `flash_session`：If a forwarded session ends sooner than this, ban that IP for `ban_duration` (default: 0, off). Stops the same address from joining and leaving again immediately
+
+- `ban_permanent_after`：After this many bans, the IP stays blocked until restart (default: 0, no escalation). First ban uses `ban_duration`, then 5×, then 20×
+
+- `handshake_timeout`：Entry handshake read timeout (default: 0, disabled)
+  - Under attack, 15s-20s is safer. 3s often surfaces as a client disconnect. Do not reuse `idle_timeout` for this; that timer can drop real play connections
+
 - `stats_interval`：Interval for server logs to show traffic statistics (default: 0s, disables stats logs)
   - When set to a positive interval, periodically shows traffic information in the console
 

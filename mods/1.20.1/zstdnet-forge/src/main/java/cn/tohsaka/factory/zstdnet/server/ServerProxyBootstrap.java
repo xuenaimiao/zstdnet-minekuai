@@ -35,6 +35,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerNegotiationEvent;
 import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import org.slf4j.Logger;
@@ -71,6 +72,8 @@ public final class ServerProxyBootstrap {
         MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onServerStopping);
         MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onServerTick);
         MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onPlayerLoggedIn);
+        MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onPlayerLoggedOut);
+        MinecraftForge.EVENT_BUS.addListener(ServerProxyBootstrap::onPlayerNegotiation);
         LOGGER.info("zstdnet server bootstrap initialized");
     }
 
@@ -133,7 +136,11 @@ public final class ServerProxyBootstrap {
         activeLanPort = -1;
         lastHudSyncMillis = 0L;
         RUNTIME.stop();
-        LanBroadcaster.stop();
+        try {
+            LanBroadcaster.stop();
+        } catch (Throwable ignored) {
+            // 专用服从未启动过 LAN 广播时，停服阶段类加载器可能已经拆掉，不能让这次调用变成崩溃报告。
+        }
         DedicatedServerAutoPort.clear();
     }
 
@@ -259,11 +266,35 @@ public final class ServerProxyBootstrap {
         }
     }
 
-    private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (!RUNTIME.protectsBackendLogin()) {
+    private static final String FLASH_NAME_MSG = "这个角色刚刚被异常进出占用，请几分钟后再从原来的网络进入。";
+
+    private static void onPlayerNegotiation(PlayerNegotiationEvent event) {
+        if (event.getProfile() == null || event.getConnection() == null) {
             return;
         }
+        SocketAddress address = ServerRealIpHooks.getRemoteAddress(
+            event.getConnection(),
+            event.getConnection().getRemoteAddress()
+        );
+        if (!RUNTIME.rejectFlashedName(event.getProfile().getName(), sourceIp(address))) {
+            return;
+        }
+        event.getConnection().disconnect(Component.literal(FLASH_NAME_MSG));
+    }
+
+    private static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        RUNTIME.notePlayerLeft(player.getGameProfile().getName(), sourceIp(player.connection.getRemoteAddress()));
+    }
+
+    private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        RUNTIME.notePlayerJoined(player.getGameProfile().getName(), sourceIp(player.connection.getRemoteAddress()));
+        if (!RUNTIME.protectsBackendLogin()) {
             return;
         }
 
@@ -293,6 +324,13 @@ public final class ServerProxyBootstrap {
             return false;
         }
         return ip.isLoopbackAddress() || ip.isAnyLocalAddress();
+    }
+
+    private static String sourceIp(SocketAddress address) {
+        if (address instanceof InetSocketAddress inet && inet.getAddress() != null) {
+            return inet.getAddress().getHostAddress();
+        }
+        return "unknown";
     }
 
     public record ServerHudSnapshot(

@@ -38,6 +38,8 @@ import cn.tohsaka.factory.zstdnet.core.compress.ZstdCodecs;
 import cn.tohsaka.factory.zstdnet.core.compress.ZstdStreams;
 import cn.tohsaka.factory.zstdnet.core.io.CountingInputStream;
 import cn.tohsaka.factory.zstdnet.core.io.CountingOutputStream;
+import cn.tohsaka.factory.zstdnet.core.limit.FlashNameGuard;
+import cn.tohsaka.factory.zstdnet.core.limit.FloodGuard;
 import cn.tohsaka.factory.zstdnet.core.limit.TokenBucketLimiter;
 import cn.tohsaka.factory.zstdnet.core.protocol.ByteArrayOps;
 import cn.tohsaka.factory.zstdnet.core.protocol.LoginDisconnect;
@@ -76,11 +78,9 @@ import java.time.Duration;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -93,6 +93,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -130,6 +131,10 @@ final class ServerProxyRuntime {
         + "The backend Minecraft server is temporarily unavailable "
         + "(it may be restarting or has just crashed). Please try again later.";
 
+    private static final String FLOOD_LOCKDOWN_MSG =
+        "服务器正在拦截连接高峰。请稍等片刻，再用同一个网络进一次。\n\n"
+        + "The server is limiting a connection flood. Wait a moment, then reconnect once from the same network.";
+
     private static final Logger LOGGER = LoggerFactory.getLogger(ServerProxyRuntime.class);
     private static final byte[] PROXY_V2_SIGNATURE = new byte[]{
         0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a
@@ -147,6 +152,9 @@ final class ServerProxyRuntime {
     private static final int DEFAULT_BURST_BYTES = 256 * 1024;
     private static final Duration DEFAULT_BAN_DURATION = Duration.ofMinutes(1);
     private static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ZERO;
+    private static final Duration DEFAULT_LOCKDOWN_DURATION = Duration.ofSeconds(20);
+    private static final Duration DEFAULT_LOCKDOWN_LOGIN_INTERVAL = Duration.ofSeconds(2);
+    private static final Duration DEFAULT_HANDSHAKE_TIMEOUT = Duration.ZERO;
     private static final String DEFAULT_TRUSTED_PROXY_IPS = "127.0.0.1,::1,0:0:0:0:0:0:0:1";
     private static final int CLIENT_PEEK_BUFFER = 4096;
     /**
@@ -170,6 +178,7 @@ final class ServerProxyRuntime {
     private ExecutorService workers;
     private ScheduledExecutorService statsTicker;
     private FloodGuard guard;
+    private final FlashNameGuard flashNames = new FlashNameGuard();
     private TrafficStats stats;
     private volatile ProxyConfig cfg;
     private volatile DictionarySampler dictionarySampler;
@@ -190,6 +199,9 @@ final class ServerProxyRuntime {
     private volatile long loadedConfigLastModified = Long.MIN_VALUE;
     private List<UdpForwarder> udpForwarders = Collections.emptyList();
     private volatile VoicePortPlan voicePortPlan = VoicePortPlan.empty();
+    private final ConcurrentHashMap<FloodGuard.DenyReason, AtomicInteger> floodDenyCounts = new ConcurrentHashMap<>();
+    private final AtomicLong lastFloodLogMs = new AtomicLong();
+    private final AtomicBoolean lockdownAnnounced = new AtomicBoolean();
 
     /**
      * 启动运行时。
@@ -245,8 +257,22 @@ final class ServerProxyRuntime {
 
             this.cfg = loaded;
             this.stats = new TrafficStats();
-            this.guard = new FloodGuard(loaded);
+            this.guard = new FloodGuard(FloodGuard.Settings.of(
+                loaded.maxConnPerIp,
+                loaded.maxReqPerWindow,
+                loaded.window,
+                loaded.banDuration,
+                loaded.maxGlobalConn,
+                loaded.maxGlobalReqPerWindow,
+                loaded.maxLoginPerWindow,
+                loaded.lockdownDuration
+            ).withLockdownLoginInterval(loaded.lockdownLoginInterval)
+                .withBypassIps(loaded.floodBypassIps)
+                .withFlashSession(loaded.flashSession)
+                .withBanPermanentAfter(loaded.banPermanentAfter));
             this.workers = Executors.newCachedThreadPool(new NamedFactory("zstdsrv-worker"));
+            this.lockdownAnnounced.set(false);
+            this.floodDenyCounts.clear();
             this.statsTicker = Executors.newSingleThreadScheduledExecutor(new NamedFactory("zstdsrv-stats"));
             this.globalLimiter = TokenBucketLimiter.create(loaded.maxRateGlobalBps, loaded.burstBytes);
             this.runtimeMode = mode;
@@ -271,6 +297,10 @@ final class ServerProxyRuntime {
             }
             LOGGER.info("[zstdnet-server] guard: max_conn={} max_req={} window={} ban={}",
                 loaded.maxConnPerIp, loaded.maxReqPerWindow, loaded.window, loaded.banDuration);
+            LOGGER.info("[zstdnet-server] flood-guard: global_conn={} global_req={} login_per_window={} lockdown={} lockdown_login_interval={} handshake_timeout={} flash_session={} ban_permanent_after={} bypass_ips={}",
+                loaded.maxGlobalConn, loaded.maxGlobalReqPerWindow, loaded.maxLoginPerWindow, loaded.lockdownDuration,
+                loaded.lockdownLoginInterval, loaded.handshakeTimeout, loaded.flashSession, loaded.banPermanentAfter,
+                loaded.floodBypassIps.size());
             LOGGER.info("[zstdnet-server] tuning: flush={} idle_timeout={} rate_per_conn={}B/s rate_global={}B/s burst={}B",
                 loaded.flushInterval, loaded.idleTimeout, loaded.maxRatePerConnBps, loaded.maxRateGlobalBps, loaded.burstBytes);
             if (loaded.autoTakeover && mode == RuntimeMode.DEDICATED) {
@@ -433,14 +463,62 @@ final class ServerProxyRuntime {
 
     private void acceptLoop() {
         while (running) {
+            Socket client = null;
+            String ip = null;
+            boolean reserved = false;
             try {
-                Socket client = listener.accept();
-                workers.execute(() -> handleClient(client));
+                client = listener.accept();
+                ip = sourceIp(client.getRemoteSocketAddress());
+                FloodGuard currentGuard = this.guard;
+                ProxyConfig currentCfg = this.cfg;
+                if (currentGuard == null || currentCfg == null) {
+                    closeSocket(client);
+                    continue;
+                }
+                FloodGuard.DenyReason deny = currentGuard.begin(ip);
+                if (deny != FloodGuard.DenyReason.NONE) {
+                    noteDenied(deny);
+                    closeSocket(client);
+                    continue;
+                }
+                reserved = true;
+                applyReadTimeout(client, currentCfg.handshakeTimeout);
+                final Socket admitted = client;
+                final String admittedIp = ip;
+                try {
+                    workers.execute(() -> handleClient(admitted, admittedIp));
+                } catch (RejectedExecutionException | OutOfMemoryError rejected) {
+                    // 线程创建失败时 JVM 会抛 OutOfMemoryError（pthread EAGAIN）。在这里吃掉，避免整服被打崩。
+                    if (reserved && guard != null) {
+                        guard.end(admittedIp);
+                    }
+                    noteDenied(FloodGuard.DenyReason.GLOBAL_CONN);
+                    closeSocket(admitted);
+                    reserved = false;
+                    client = null;
+                    continue;
+                }
+                reserved = false;
+                client = null;
+            } catch (RejectedExecutionException rejected) {
+                if (reserved && ip != null && guard != null) {
+                    guard.end(ip);
+                }
+                noteDenied(FloodGuard.DenyReason.GLOBAL_CONN);
+                closeSocket(client);
             } catch (IOException e) {
+                if (reserved && ip != null && guard != null) {
+                    guard.end(ip);
+                }
+                closeSocket(client);
                 if (running) {
                     LOGGER.warn("[zstdnet-server] accept error: {}", e.toString());
                 }
             } catch (Exception e) {
+                if (reserved && ip != null && guard != null) {
+                    guard.end(ip);
+                }
+                closeSocket(client);
                 if (running) {
                     LOGGER.warn("[zstdnet-server] accept unexpected error: {}", e.toString());
                 }
@@ -451,16 +529,21 @@ final class ServerProxyRuntime {
     /**
      * 处理单个客户端连接，建立到后端连接后执行双向转发。
      */
-    private void handleClient(Socket client) {
+    private void handleClient(Socket client, String reservedIp) {
         // 快照当前配置：dictionary_auto 训练完成会原子替换 this.cfg（热插字典），快照确保本连接全程读到一致的一份。
         final ProxyConfig cfg = this.cfg;
         if (cfg == null) {
             closeSocket(client);
+            if (guard != null) {
+                guard.end(reservedIp);
+            }
             return;
         }
         stats.addConn(1);
         String remoteIp = sourceIp(client.getRemoteSocketAddress());
-        String guardIp = remoteIp;
+        String guardIp = reservedIp != null && !reservedIp.isEmpty() ? reservedIp : remoteIp;
+        long playStartedMs = 0L;
+        boolean loginGranted = false;
 
         try (Socket clientSocket = client) {
             PushbackInputStream pushIn = new PushbackInputStream(clientSocket.getInputStream(), CLIENT_PEEK_BUFFER);
@@ -470,17 +553,22 @@ final class ServerProxyRuntime {
                 return;
             }
 
-            if (!guard.begin(guardIp)) {
-                LOGGER.warn("[server] blocked {} by flood guard", guardIp);
-                return;
-            }
-
             DetectedClientMode clientMode = detectClientMode(pushIn);
             if (clientMode.mode == ClientMode.RAW_LOGIN) {
                 LOGGER.warn("[server] rejected raw login attempt from {} on zstd-only entry", guardIp);
                 sendLoginDisconnect(clientSocket, RAW_LOGIN_REJECT_MSG);
                 return;
             }
+            if (clientMode.mode != ClientMode.RAW_STATUS) {
+                FloodGuard.DenyReason loginDeny = guard.beginLogin(guardIp);
+                if (loginDeny != FloodGuard.DenyReason.NONE) {
+                    noteDenied(loginDeny);
+                    sendCompressedLoginDisconnect(clientSocket, cfg, false, FLOOD_LOCKDOWN_MSG);
+                    return;
+                }
+                loginGranted = true;
+            }
+            clearReadTimeout(clientSocket);
 
             try (Socket upstream = new Socket()) {
                 try {
@@ -634,66 +722,61 @@ final class ServerProxyRuntime {
                     ? chunkCacheMeasurement().newCollector(clientProtocolVersion)
                     : null;
 
+                playStartedMs = System.currentTimeMillis();
                 final InputStream c2sDecompressor = upstreamDecompressor;
-                Future<Exception> c2s = workers.submit(() -> {
-                    try {
-                        pumpDecompress(upstream, c2sDecompressor, stats);
-                        return null;
-                    } catch (Exception ex) {
-                        return ex;
-                    } finally {
-                        closeWrite(upstream);
-                    }
-                });
-
-                Future<Exception> s2c = workers.submit(() -> {
-                    try {
-                        forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion, transformTable, chunkMeasure, chunkCacheActive, cacheableTable, chunkWarm, chunkCacheVersion, chunkCacheBypassWindow, chunkCachePatch, chunkProtocolVersion);
-                        return null;
-                    } catch (Exception ex) {
-                        return ex;
-                    } finally {
-                        closeWrite(clientSocket);
-                    }
-                });
+                // 上行放在当前线程里跑，只为下行再借一条线程。两条方向都丢进同一个池会让每条连接占 3 个线程，连接一多就会 pthread EAGAIN。
+                Future<Exception> s2c;
+                try {
+                    s2c = workers.submit(() -> {
+                        try {
+                            forwardCompress(clientSocket.getOutputStream(), upstream, cfg.level, cfg.flushInterval, stats, perConnLimiter, globalLimiter, cfg.compression, downstreamDict, doTransformDownstream, transformVersion, transformTable, chunkMeasure, chunkCacheActive, cacheableTable, chunkWarm, chunkCacheVersion, chunkCacheBypassWindow, chunkCachePatch, chunkProtocolVersion);
+                            return null;
+                        } catch (Exception ex) {
+                            return ex;
+                        } finally {
+                            closeWrite(clientSocket);
+                        }
+                    });
+                } catch (RejectedExecutionException | OutOfMemoryError noThread) {
+                    closeSocket(clientSocket);
+                    closeSocket(upstream);
+                    LOGGER.warn("[zstdnet-server] no worker for {} ({})", guardIp, noThread.toString());
+                    return;
+                }
 
                 Exception err1 = null;
-                Exception err2 = null;
-                while (!c2s.isDone() && !s2c.isDone()) {
-                    Thread.sleep(20L);
+                try {
+                    pumpDecompress(upstream, c2sDecompressor, stats);
+                } catch (Exception ex) {
+                    err1 = ex;
+                } finally {
+                    closeWrite(upstream);
                 }
 
-                if (c2s.isDone()) {
-                    err1 = c2s.get();
-                }
-                if (s2c.isDone()) {
-                    err2 = s2c.get();
-                }
-
-                // One direction ended: close both sockets so the other direction exits quickly too.
                 closeSocket(clientSocket);
                 closeSocket(upstream);
-
-                if (!c2s.isDone()) {
-                    err1 = c2s.get();
-                }
-                if (!s2c.isDone()) {
-                    err2 = s2c.get();
-                }
+                Exception err2 = s2c.get();
                 if (isRealPipeErr(err1)) {
                     LOGGER.warn("pipe error source={} dir=client->mc: {}", guardIp, err1.toString());
                 }
                 if (isRealPipeErr(err2)) {
                     LOGGER.warn("pipe error source={} dir=mc->client: {}", guardIp, err2.toString());
                 }
-            } finally {
-                guard.end(guardIp);
             }
         } catch (Exception ex) {
             if (isRealPipeErr(ex)) {
                 LOGGER.warn("[server] connection error source={} remote={}: {}", guardIp, remoteIp, ex.toString());
             }
         } finally {
+            if (guard != null) {
+                if (playStartedMs > 0L) {
+                    guard.notePlaySession(guardIp, Math.max(0L, System.currentTimeMillis() - playStartedMs));
+                }
+                if (loginGranted) {
+                    guard.releaseLoginAdmission(guardIp);
+                }
+                guard.end(guardIp);
+            }
             stats.addConn(-1);
         }
     }
@@ -927,7 +1010,7 @@ final class ServerProxyRuntime {
         }
 
         if (sourceIp != null && !sourceIp.trim().isEmpty()) {
-            LOGGER.info("[zstdnet-server] appended forwarded real IP {} to login handshake host '{}'", sourceIp, cleanedHost);
+            LOGGER.debug("[zstdnet-server] appended forwarded real IP {} to login handshake host '{}'", sourceIp, cleanedHost);
         }
 
         byte[] rebuilt = ByteArrayOps.concat(
@@ -1398,6 +1481,12 @@ final class ServerProxyRuntime {
             FloodGuard currentGuard = guard;
             if (currentGuard != null) {
                 currentGuard.sweepExpired();
+                boolean lockdown = currentGuard.inLockdown();
+                if (lockdown && lockdownAnnounced.compareAndSet(false, true)) {
+                    LOGGER.warn("[zstdnet-server] login lockdown ON (new logins delayed); active_conn={}", currentGuard.globalActiveConn());
+                } else if (!lockdown && lockdownAnnounced.compareAndSet(true, false)) {
+                    LOGGER.info("[zstdnet-server] login lockdown OFF");
+                }
             }
 
             long rawUp = stats.rawUpBytes.get();
@@ -1517,6 +1606,24 @@ final class ServerProxyRuntime {
         Duration statsInterval = parseDuration(props.getProperty("stats_interval"), Duration.ZERO);
         Duration flushInterval = parseDuration(props.getProperty("flush_interval"), Duration.ofMillis(2));
         Duration idleTimeout = parseDuration(props.getProperty("idle_timeout"), DEFAULT_IDLE_TIMEOUT);
+        int maxGlobalConn = parseInt(props.getProperty("max_global_conn"), 0);
+        int maxGlobalReq = parseInt(props.getProperty("max_global_req_per_window"), 0);
+        int maxLogin = parseInt(props.getProperty("max_login_per_window"), 0);
+        Duration lockdown = parseDuration(props.getProperty("lockdown_duration"), DEFAULT_LOCKDOWN_DURATION);
+        Duration lockdownLoginInterval = parseDuration(
+            props.getProperty("lockdown_login_interval"),
+            DEFAULT_LOCKDOWN_LOGIN_INTERVAL
+        );
+        Duration handshakeTimeout = parseDuration(props.getProperty("handshake_timeout"), DEFAULT_HANDSHAKE_TIMEOUT);
+        Set<String> floodBypassIps = parseIpList(props.getProperty("flood_bypass_ips", ""));
+        Duration flashSession = parseDuration(props.getProperty("flash_session"), Duration.ZERO);
+        if (flashSession.isNegative()) {
+            flashSession = Duration.ZERO;
+        }
+        int banPermanentAfter = parseInt(props.getProperty("ban_permanent_after"), 0);
+        if (banPermanentAfter < 0) {
+            banPermanentAfter = 0;
+        }
         long maxRatePerConnBps = parseLong(props.getProperty("max_rate_per_conn_bps"), 0L);
         long maxRateGlobalBps = parseLong(props.getProperty("max_rate_global_bps"), 0L);
         int burstBytes = parseInt(props.getProperty("burst_bytes"), DEFAULT_BURST_BYTES);
@@ -1540,6 +1647,9 @@ final class ServerProxyRuntime {
         }
         if (burstBytes <= 0) {
             burstBytes = DEFAULT_BURST_BYTES;
+        }
+        if (lockdownLoginInterval.isNegative()) {
+            lockdownLoginInterval = Duration.ZERO;
         }
 
         return new ProxyConfig(
@@ -1567,7 +1677,16 @@ final class ServerProxyRuntime {
             voiceTransport,
             extraUdpPorts,
             transform,
-            chunkCache
+            chunkCache,
+            maxGlobalConn,
+            maxGlobalReq,
+            maxLogin,
+            lockdown,
+            handshakeTimeout,
+            lockdownLoginInterval,
+            floodBypassIps,
+            flashSession,
+            banPermanentAfter
         );
     }
 
@@ -1793,6 +1912,20 @@ final class ServerProxyRuntime {
         return Collections.unmodifiableSet(new LinkedHashSet<>(ips));
     }
 
+    private static Set<String> parseIpList(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return Collections.emptySet();
+        }
+        LinkedHashSet<String> ips = new LinkedHashSet<>();
+        for (String item : raw.split(",")) {
+            String value = item.trim();
+            if (!value.isEmpty()) {
+                ips.add(value);
+            }
+        }
+        return ips.isEmpty() ? Collections.<String>emptySet() : Collections.unmodifiableSet(ips);
+    }
+
     /**
      * 生成默认配置模板文本。
      */
@@ -1853,6 +1986,33 @@ final class ServerProxyRuntime {
             + "\n"
             + "# 超限后的封禁时长。\n"
             + "ban_duration=1m\n"
+            + "\n"
+            + "# 全局同时连接上限（0=不限制）。分布式假人换 IP 时靠这项封顶。\n"
+            + "max_global_conn=0\n"
+            + "\n"
+            + "# 全服 request_window 内新连接次数（0=不限制）。超限进入登录 lockdown，不再直接掐断 TCP。\n"
+            + "max_global_req_per_window=0\n"
+            + "\n"
+            + "# 全服 request_window 内新登录次数，不含 MOTD ping（0=不限制）。\n"
+            + "max_login_per_window=0\n"
+            + "\n"
+            + "# 登录洪峰触发后拒绝新登录的时长。MOTD 仍可通行。\n"
+            + "lockdown_duration=20s\n"
+            + "\n"
+            + "# 入口握手读超时（0=不额外限制）。攻击时可设 15s-20s，不要短到 3s，否则真人会看到连接中断。\n"
+            + "handshake_timeout=0\n"
+            + "\n"
+            + "# lockdown 期间，同一 IP 第一次被拒绝后，至少再等这么久，下一次连接才放行。0=第二次立刻放行。默认 2s。\n"
+            + "lockdown_login_interval=2s\n"
+            + "\n"
+            + "# 不受连接数/登录限速影响的 IP，逗号分隔。留空=无。\n"
+            + "flood_bypass_ips=\n"
+            + "\n"
+            + "# 进世界后短于这个时间就断开，按 ban_duration 封 IP。0=关闭，避免其他服默认行为变化。\n"
+            + "flash_session=0\n"
+            + "\n"
+            + "# 同一 IP 累计封禁几次后直到重启都不再放行。0=不升级、不永久，一直用 ban_duration。\n"
+            + "ban_permanent_after=0\n"
             + "\n"
             + "# 统计日志输出间隔。\n"
             + "stats_interval=0s\n"
@@ -1940,6 +2100,33 @@ final class ServerProxyRuntime {
             + "\n"
             + "# 超限后的封禁时长。\n"
             + "ban_duration=1m\n"
+            + "\n"
+            + "# 全局同时连接上限（0=不限制）。分布式假人换 IP 时靠这项封顶。\n"
+            + "max_global_conn=0\n"
+            + "\n"
+            + "# 全服 request_window 内新连接次数（0=不限制）。超限进入登录 lockdown，不再直接掐断 TCP。\n"
+            + "max_global_req_per_window=0\n"
+            + "\n"
+            + "# 全服 request_window 内新登录次数，不含 MOTD ping（0=不限制）。\n"
+            + "max_login_per_window=0\n"
+            + "\n"
+            + "# 登录洪峰触发后拒绝新登录的时长。MOTD 仍可通行。\n"
+            + "lockdown_duration=20s\n"
+            + "\n"
+            + "# 入口握手读超时（0=不额外限制）。攻击时可设 15s-20s，不要短到 3s，否则真人会看到连接中断。\n"
+            + "handshake_timeout=0\n"
+            + "\n"
+            + "# lockdown 期间，同一 IP 第一次被拒绝后，至少再等这么久，下一次连接才放行。0=第二次立刻放行。默认 2s。\n"
+            + "lockdown_login_interval=2s\n"
+            + "\n"
+            + "# 不受连接数/登录限速影响的 IP，逗号分隔。留空=无。\n"
+            + "flood_bypass_ips=\n"
+            + "\n"
+            + "# 进世界后短于这个时间就断开，按 ban_duration 封 IP。0=关闭，避免其他服默认行为变化。\n"
+            + "flash_session=0\n"
+            + "\n"
+            + "# 同一 IP 累计封禁几次后直到重启都不再放行。0=不升级、不永久，一直用 ban_duration。\n"
+            + "ban_permanent_after=0\n"
             + "\n"
             + "# 统计日志输出间隔。\n"
             + "stats_interval=0s\n"
@@ -2250,6 +2437,78 @@ final class ServerProxyRuntime {
             socket.setSoTimeout(bounded);
         } catch (Exception ignored) {
         }
+    }
+
+    private void clearReadTimeout(Socket socket) {
+        if (socket == null) {
+            return;
+        }
+        try {
+            socket.setSoTimeout(0);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void notePlayerJoined(String name, String ip) {
+        ProxyConfig current = this.cfg;
+        if (current == null || current.flashSession().isZero() || current.flashSession().isNegative()) {
+            return;
+        }
+        flashNames.onJoin(name, ip, System.currentTimeMillis());
+    }
+
+    public void notePlayerLeft(String name, String ip) {
+        ProxyConfig current = this.cfg;
+        if (current == null) {
+            return;
+        }
+        flashNames.onLeave(
+            name,
+            ip,
+            System.currentTimeMillis(),
+            current.flashSession().toMillis(),
+            current.banDuration().toMillis()
+        );
+    }
+
+    public boolean rejectFlashedName(String name, String ip) {
+        ProxyConfig current = this.cfg;
+        if (current == null || current.flashSession().isZero() || current.flashSession().isNegative()) {
+            return false;
+        }
+        return flashNames.isBlocked(name, ip, System.currentTimeMillis());
+    }
+
+    private void noteDenied(FloodGuard.DenyReason reason) {
+        if (reason == null || reason == FloodGuard.DenyReason.NONE) {
+            return;
+        }
+        floodDenyCounts.computeIfAbsent(reason, ignored -> new AtomicInteger()).incrementAndGet();
+        long now = System.currentTimeMillis();
+        long prev = lastFloodLogMs.get();
+        if (now - prev < 5000L || !lastFloodLogMs.compareAndSet(prev, now)) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder("[zstdnet-server] flood guard denied");
+        boolean any = false;
+        for (FloodGuard.DenyReason key : FloodGuard.DenyReason.values()) {
+            AtomicInteger counter = floodDenyCounts.get(key);
+            if (counter == null) {
+                continue;
+            }
+            int n = counter.getAndSet(0);
+            if (n > 0) {
+                any = true;
+                sb.append(' ').append(key.name().toLowerCase(Locale.ROOT)).append('=').append(n);
+            }
+        }
+        if (!any) {
+            return;
+        }
+        if (guard != null && guard.inLockdown()) {
+            sb.append(" lockdown=on active_conn=").append(guard.globalActiveConn());
+        }
+        LOGGER.warn(sb.toString());
     }
 
     private String sourceIp(SocketAddress address) {
@@ -2620,6 +2879,15 @@ final class ServerProxyRuntime {
         private final String extraUdpPorts;
         private final TransformOptions transform;
         private final CacheMode chunkCache;
+        private final int maxGlobalConn;
+        private final int maxGlobalReqPerWindow;
+        private final int maxLoginPerWindow;
+        private final Duration lockdownDuration;
+        private final Duration handshakeTimeout;
+        private final Duration lockdownLoginInterval;
+        private final Set<String> floodBypassIps;
+        private final Duration flashSession;
+        private final int banPermanentAfter;
 
         private ProxyConfig(
             boolean enabled,
@@ -2646,7 +2914,16 @@ final class ServerProxyRuntime {
             String voiceTransport,
             String extraUdpPorts,
             TransformOptions transform,
-            CacheMode chunkCache
+            CacheMode chunkCache,
+            int maxGlobalConn,
+            int maxGlobalReqPerWindow,
+            int maxLoginPerWindow,
+            Duration lockdownDuration,
+            Duration handshakeTimeout,
+            Duration lockdownLoginInterval,
+            Set<String> floodBypassIps,
+            Duration flashSession,
+            int banPermanentAfter
         ) {
             this.enabled = enabled;
             this.autoTakeover = autoTakeover;
@@ -2673,6 +2950,15 @@ final class ServerProxyRuntime {
             this.extraUdpPorts = extraUdpPorts;
             this.transform = transform;
             this.chunkCache = chunkCache;
+            this.maxGlobalConn = maxGlobalConn;
+            this.maxGlobalReqPerWindow = maxGlobalReqPerWindow;
+            this.maxLoginPerWindow = maxLoginPerWindow;
+            this.lockdownDuration = lockdownDuration;
+            this.handshakeTimeout = handshakeTimeout;
+            this.lockdownLoginInterval = lockdownLoginInterval;
+            this.floodBypassIps = floodBypassIps == null ? Collections.<String>emptySet() : floodBypassIps;
+            this.flashSession = flashSession == null ? Duration.ZERO : flashSession;
+            this.banPermanentAfter = Math.max(0, banPermanentAfter);
         }
 
         public boolean enabled() { return this.enabled; }
@@ -2700,6 +2986,15 @@ final class ServerProxyRuntime {
         public String extraUdpPorts() { return this.extraUdpPorts; }
         public TransformOptions transform() { return this.transform; }
         public CacheMode chunkCache() { return this.chunkCache; }
+        public int maxGlobalConn() { return this.maxGlobalConn; }
+        public int maxGlobalReqPerWindow() { return this.maxGlobalReqPerWindow; }
+        public int maxLoginPerWindow() { return this.maxLoginPerWindow; }
+        public Duration lockdownDuration() { return this.lockdownDuration; }
+        public Duration handshakeTimeout() { return this.handshakeTimeout; }
+        public Duration lockdownLoginInterval() { return this.lockdownLoginInterval; }
+        public Set<String> floodBypassIps() { return this.floodBypassIps; }
+        public Duration flashSession() { return this.flashSession; }
+        public int banPermanentAfter() { return this.banPermanentAfter; }
 
         private ProxyConfig withTarget(HostPort newTarget) {
             return new ProxyConfig(
@@ -2727,7 +3022,16 @@ final class ServerProxyRuntime {
                 voiceTransport,
                 extraUdpPorts,
                 transform,
-                chunkCache
+                chunkCache,
+                maxGlobalConn,
+                maxGlobalReqPerWindow,
+                maxLoginPerWindow,
+                lockdownDuration,
+                handshakeTimeout,
+                lockdownLoginInterval,
+                floodBypassIps,
+                flashSession,
+                banPermanentAfter
             );
         }
 
@@ -2757,7 +3061,16 @@ final class ServerProxyRuntime {
                 voiceTransport,
                 extraUdpPorts,
                 transform,
-                chunkCache
+                chunkCache,
+                maxGlobalConn,
+                maxGlobalReqPerWindow,
+                maxLoginPerWindow,
+                lockdownDuration,
+                handshakeTimeout,
+                lockdownLoginInterval,
+                floodBypassIps,
+                flashSession,
+                banPermanentAfter
             );
         }
 
@@ -2787,7 +3100,16 @@ final class ServerProxyRuntime {
                 voiceTransport,
                 extraUdpPorts,
                 transform,
-                chunkCache
+                chunkCache,
+                maxGlobalConn,
+                maxGlobalReqPerWindow,
+                maxLoginPerWindow,
+                lockdownDuration,
+                handshakeTimeout,
+                lockdownLoginInterval,
+                floodBypassIps,
+                flashSession,
+                banPermanentAfter
             );
         }
 
@@ -2825,7 +3147,16 @@ final class ServerProxyRuntime {
                 voiceTransport,
                 extraUdpPorts,
                 transform,
-                chunkCache
+                chunkCache,
+                maxGlobalConn,
+                maxGlobalReqPerWindow,
+                maxLoginPerWindow,
+                lockdownDuration,
+                handshakeTimeout,
+                lockdownLoginInterval,
+                floodBypassIps,
+                flashSession,
+                banPermanentAfter
             );
         }
 
@@ -2852,6 +3183,9 @@ final class ServerProxyRuntime {
                 && this.level == other.level
                 && this.maxConnPerIp == other.maxConnPerIp
                 && this.maxReqPerWindow == other.maxReqPerWindow
+                && this.maxGlobalConn == other.maxGlobalConn
+                && this.maxGlobalReqPerWindow == other.maxGlobalReqPerWindow
+                && this.maxLoginPerWindow == other.maxLoginPerWindow
                 && this.maxRatePerConnBps == other.maxRatePerConnBps
                 && this.maxRateGlobalBps == other.maxRateGlobalBps
                 && this.burstBytes == other.burstBytes
@@ -2865,6 +3199,12 @@ final class ServerProxyRuntime {
                 && Objects.equals(this.statsInterval, other.statsInterval)
                 && Objects.equals(this.flushInterval, other.flushInterval)
                 && Objects.equals(this.idleTimeout, other.idleTimeout)
+                && Objects.equals(this.lockdownDuration, other.lockdownDuration)
+                && Objects.equals(this.handshakeTimeout, other.handshakeTimeout)
+                && Objects.equals(this.lockdownLoginInterval, other.lockdownLoginInterval)
+                && Objects.equals(this.floodBypassIps, other.floodBypassIps)
+                && Objects.equals(this.flashSession, other.flashSession)
+                && this.banPermanentAfter == other.banPermanentAfter
                 && Objects.equals(this.trustedProxyIps, other.trustedProxyIps)
                 && Objects.equals(this.compression, other.compression)
                 && Objects.equals(this.voiceTransport, other.voiceTransport)
@@ -2878,7 +3218,9 @@ final class ServerProxyRuntime {
             return Objects.hash(enabled, autoTakeover, listen, target, voiceChatPassthrough, voiceChatListen,
                 voiceChatTarget, level, maxConnPerIp, maxReqPerWindow, window, banDuration, statsInterval,
                 flushInterval, idleTimeout, maxRatePerConnBps, maxRateGlobalBps, burstBytes, trustProxyProtocol,
-                trustedProxyIps, compression, voiceTransport, extraUdpPorts, transform, chunkCache);
+                trustedProxyIps, compression, voiceTransport, extraUdpPorts, transform, chunkCache,
+                maxGlobalConn, maxGlobalReqPerWindow, maxLoginPerWindow, lockdownDuration, handshakeTimeout,
+                lockdownLoginInterval, floodBypassIps, flashSession, banPermanentAfter);
         }
 
         @Override
@@ -2907,7 +3249,16 @@ final class ServerProxyRuntime {
                 + ", voiceTransport=" + voiceTransport
                 + ", extraUdpPorts=" + extraUdpPorts
                 + ", transform=" + transform
-                + ", chunkCache=" + chunkCache + "]";
+                + ", chunkCache=" + chunkCache
+                + ", maxGlobalConn=" + maxGlobalConn
+                + ", maxGlobalReqPerWindow=" + maxGlobalReqPerWindow
+                + ", maxLoginPerWindow=" + maxLoginPerWindow
+                + ", lockdownDuration=" + lockdownDuration
+                + ", handshakeTimeout=" + handshakeTimeout
+                + ", lockdownLoginInterval=" + lockdownLoginInterval
+                + ", floodBypassIps=" + floodBypassIps
+                + ", flashSession=" + flashSession
+                + ", banPermanentAfter=" + banPermanentAfter + "]";
         }
 
     }
@@ -3079,90 +3430,6 @@ final class ServerProxyRuntime {
         @Override
         public String toString() {
             return "HostPort[host=" + host + ", port=" + port + "]";
-        }
-    }
-
-    /**
-     * 防刷模块：
-     * - 限制每 IP 并发连接数
-     * - 限制窗口内请求次数并封禁
-     */
-    private static final class FloodGuard {
-        private final Map<String, GuardEntry> state = new ConcurrentHashMap<>();
-        private final ProxyConfig cfg;
-
-        private FloodGuard(ProxyConfig cfg) {
-            this.cfg = cfg;
-        }
-
-        private synchronized boolean begin(String ip) {
-            long now = System.currentTimeMillis();
-            GuardEntry entry = state.computeIfAbsent(ip, k -> new GuardEntry());
-            pruneRequests(entry, now);
-
-            if (entry.bannedUntilMs > now) {
-                return false;
-            }
-
-            if (cfg.maxReqPerWindow > 0 && !cfg.window.isZero() && !cfg.window.isNegative()) {
-                entry.requestsMs.addLast(now);
-                if (entry.requestsMs.size() > cfg.maxReqPerWindow) {
-                    entry.bannedUntilMs = now + cfg.banDuration.toMillis();
-                    return false;
-                }
-            }
-
-            if (cfg.maxConnPerIp > 0 && entry.activeConn >= cfg.maxConnPerIp) {
-                return false;
-            }
-
-            entry.activeConn++;
-            return true;
-        }
-
-        private synchronized void end(String ip) {
-            GuardEntry entry = state.get(ip);
-            if (entry == null) {
-                return;
-            }
-            if (entry.activeConn > 0) {
-                entry.activeConn--;
-            }
-            long now = System.currentTimeMillis();
-            pruneRequests(entry, now);
-            if (isRemovable(entry, now)) {
-                state.remove(ip);
-            }
-        }
-
-        private synchronized void sweepExpired() {
-            long now = System.currentTimeMillis();
-            state.entrySet().removeIf(e -> {
-                GuardEntry entry = e.getValue();
-                pruneRequests(entry, now);
-                return isRemovable(entry, now);
-            });
-        }
-
-        private void pruneRequests(GuardEntry entry, long now) {
-            if (cfg.window.isZero() || cfg.window.isNegative()) {
-                entry.requestsMs.clear();
-                return;
-            }
-            long cutoff = now - cfg.window.toMillis();
-            while (!entry.requestsMs.isEmpty() && entry.requestsMs.peekFirst() < cutoff) {
-                entry.requestsMs.removeFirst();
-            }
-        }
-
-        private boolean isRemovable(GuardEntry entry, long now) {
-            return entry.activeConn == 0 && entry.requestsMs.isEmpty() && entry.bannedUntilMs <= now;
-        }
-
-        private static final class GuardEntry {
-            private int activeConn;
-            private long bannedUntilMs;
-            private final Deque<Long> requestsMs = new ArrayDeque<>();
         }
     }
 

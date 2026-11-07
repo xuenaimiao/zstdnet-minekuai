@@ -504,6 +504,30 @@ mc.example.com:35565
 - `ban_duration`：超过限制后封禁的时间（默认：1m）
   - 防止恶意攻击，被封禁的 IP 暂时无法连接
 
+- `max_global_conn`：全服同时连接上限（默认：0，不限制）
+  - 分布式假人换 IP 时，单 IP 限制拦不住，靠这项把入口连接数封顶
+  - 建议设成 `max-players` 再留一点余量，例如 100 人服用 160
+
+- `max_global_req_per_window`：全服在 `request_window` 内允许的新连接次数（默认：0，不限制）
+  - 超限会进入登录 lockdown，不再直接掐断 TCP（避免客户端只看到「连接中断」）
+
+- `max_login_per_window`：全服在 `request_window` 内允许的新登录次数（默认：0，不限制）
+  - 只统计进服握手，不含 MOTD / 状态 ping
+  - 超限进入 lockdown：同一 IP 第一次会看到“马上再进一次”，第二次放行；一次性换 IP 的连接进不去。已在线玩家不受影响
+
+- `lockdown_duration`：登录洪峰触发后限制新登录的时长（默认：20s）
+
+- `lockdown_login_interval`：lockdown 期间，同一 IP 第一次被拒绝后，至少再等这么久才放行下一次（默认：2s；0 表示第二次立刻放行）。立刻连开的第二条不进世界
+
+- `flood_bypass_ips`：逗号分隔的 IP，不受连接数和登录限速影响（默认：空）
+
+- `flash_session`：进世界后短于这个时间就断开，则按 `ban_duration` 封该 IP（默认：0，关闭）。用来减少同一地址反复进入又秒退刷日志
+
+- `ban_permanent_after`：同一 IP 累计封禁几次后直到重启都不再放行（默认：0，不升级）。第一次用 `ban_duration`，之后 5 倍、20 倍
+
+- `handshake_timeout`：入口握手读超时（默认：0，不额外限制）
+  - 攻击时建议 15s-20s。设成 3s 容易把真人打成「连接中断」。不要用 `idle_timeout` 代替，那会误断正常游戏连接
+
 - `stats_interval`：服务器日志显示流量统计的间隔（默认：0s，关闭统计日志）
   - 设置为正数间隔时，在控制台定时显示流量情况
 
