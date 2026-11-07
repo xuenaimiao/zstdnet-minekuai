@@ -52,8 +52,9 @@ public final class VoicePortSync {
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(Zstdnet.MODID, "voice_port_sync"),
         () -> PROTOCOL_VERSION,
-        version -> NetworkRegistry.ABSENT.equals(version) || NetworkRegistry.ACCEPTVANILLA.equals(version) || PROTOCOL_VERSION.equals(version),
-        version -> NetworkRegistry.ABSENT.equals(version) || NetworkRegistry.ACCEPTVANILLA.equals(version) || PROTOCOL_VERSION.equals(version)
+        // 1.20.1 里 ABSENT 不是字符串，缺这条通道的客户端必须走 acceptMissingOr，否则登录会被判模组不匹配。
+        NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION),
+        NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION)
     );
 
     private static boolean initialized;

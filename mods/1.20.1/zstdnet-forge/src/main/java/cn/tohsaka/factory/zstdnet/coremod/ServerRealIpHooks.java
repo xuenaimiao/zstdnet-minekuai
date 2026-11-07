@@ -47,7 +47,7 @@ public final class ServerRealIpHooks {
             SocketAddress forwarded = new InetSocketAddress(address, port);
             FORWARDED_ADDRESSES.put(connection, forwarded);
             replaceConnectionAddress(connection, forwarded);
-            LOGGER.info("[zstdnet-server] forwarded backend connection address {} -> {}", backendAddress, forwarded);
+            LOGGER.debug("[zstdnet-server] forwarded backend connection address {} -> {}", backendAddress, forwarded);
         } catch (Exception e) {
             LOGGER.debug("[zstdnet-server] ignored invalid forwarded address '{}': {}", sourceIp, e.toString());
         }
