@@ -660,8 +660,14 @@ public final class ClientProxyPublisher {
         serverData.ip = remoteAddr;
         String localAddr = "127.0.0.1:" + proxy.localPort();
         LOGGER.info("zstdnet: {} -> {} via local {}", safe(serverData.name), remoteAddr, localAddr);
-        ConnectScreenHooks.setBypass(true);
-        ConnectScreen.startConnecting(parent, Minecraft.getInstance(), ServerAddress.parseString(localAddr), serverData);
+        // 传真实服务器地址给 startConnecting，由方法体开头的 ConnectScreenHooks 钩子改投到本地代理：
+        // 包在 startConnecting 外层的模组（AutoModpack 5 按它记录整合包来源）看到的就是固定的真实地址，
+        // 而不是每次都变的 127.0.0.1:随机端口（否则 AMP 每次进服都弹「新服务器地址」并断开，永远进不去）。
+        ConnectScreenHooks.redirectNext(ServerAddress.parseString(localAddr));
+        ConnectScreen.startConnecting(parent, Minecraft.getInstance(), ServerAddress.parseString(remoteAddr), serverData);
+        if (ConnectScreenHooks.takeUnusedRedirect() != null) {
+            LOGGER.warn("zstdnet: connect-screen hook did not consume the local proxy redirect for {}; this join may bypass the proxy", remoteAddr);
+        }
         return true;
     }
 

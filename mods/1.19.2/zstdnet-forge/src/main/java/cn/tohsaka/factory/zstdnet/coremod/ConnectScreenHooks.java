@@ -47,6 +47,11 @@ import java.io.IOException;
 public final class ConnectScreenHooks {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static volatile boolean bypassing;
+    /**
+     * 下一次 startConnecting 要改投的本地代理地址（ClientProxyPublisher 设置，钩子取用一次即清空）。
+     * 见 {@link #redirectNext}。
+     */
+    private static volatile ServerAddress pendingRedirect;
     private static volatile LocalZstdNet.ProxyHandle currentProxy;
     private static final Object LOCK = new Object();
 
@@ -61,10 +66,37 @@ public final class ConnectScreenHooks {
     }
 
     /**
+     * 让下一次 {@code ConnectScreen.startConnecting} 在方法体开头改投到 {@code target}（本地 zstd 代理）。
+     *
+     * <p>调用方给 startConnecting 传的是<b>真实服务器地址</b>：包在 startConnecting 外层的模组据此识别服务器——
+     * AutoModpack 5 用它记录整合包来源（origin）并按地址存证书指纹。若直接把 127.0.0.1:随机端口 传进去，
+     * 本地代理端口每次都不同，AMP 每次进服都会弹「新服务器地址」并断开登录，玩家永远进不去。
+     * 改投发生在方法体内（coremod 先于 Mixin、MixinExtras 的 @WrapMethod 在其它注入之后才包裹），
+     * 所以外层包装看到真实地址，原版连接逻辑照常连本地代理。
+     */
+    public static void redirectNext(ServerAddress target) {
+        pendingRedirect = target;
+    }
+
+    /** 取走并清空未被钩子消费的改投目标；返回非 null 说明本次 startConnecting 没有经过钩子。 */
+    public static ServerAddress takeUnusedRedirect() {
+        ServerAddress unused = pendingRedirect;
+        pendingRedirect = null;
+        return unused;
+    }
+
+    /**
      * Called by coremod before the connection is established.
      * Returns a potentially modified ServerAddress that routes through a local zstd proxy.
      */
     public static ServerAddress interceptConnect(ServerAddress original, ServerData serverData) {
+        ServerAddress redirect = pendingRedirect;
+        if (redirect != null) {
+            // ClientProxyPublisher 已起好本地代理、传入真实地址：在这里改投，外层包装仍看到真实地址。
+            pendingRedirect = null;
+            bypassing = false;
+            return redirect;
+        }
         if (bypassing) {
             bypassing = false;
             return original;
