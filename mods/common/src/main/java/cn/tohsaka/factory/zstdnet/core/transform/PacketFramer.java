@@ -123,6 +123,44 @@ public final class PacketFramer {
         compact();
     }
 
+    /** {@link #peekFirstPacketId} 返回值：缓冲里的字节还不够判定首帧。 */
+    public static final int FIRST_NEED_MORE = -1;
+    /** {@link #peekFirstPacketId} 返回值：首帧前缀不是合法的 {@code [VarInt 长度][VarInt packetId]}——这条流不是 MC 帧流。 */
+    public static final int FIRST_NOT_A_FRAME = -2;
+    /** {@link #peekFirstPacketId} 返回值：首帧是合法的空帧（长度前缀 0，没有 packetId）。原版不会发，但帧格式允许。 */
+    public static final int FIRST_EMPTY_FRAME = -3;
+
+    /**
+     * 只看缓冲里首帧的 packetId（不要求整帧到齐，不推进读指针），供编码层在<b>第一次</b>切帧前判断
+     * 这条下行流还是不是明文 MC 帧流：登录态首帧若是 Encryption Request（packetId 0x01），
+     * 其后整条流都会被 AES 加密，再按 {@code [VarInt 长度][载荷]} 切帧只会把密文当成永远收不齐的大帧憋住。
+     *
+     * <p>首帧发生在压缩协商之前，格式恒为 {@code [长度][packetId][…]}（无 dataLength）。
+     *
+     * @return packetId（&ge;0）；或 {@link #FIRST_NEED_MORE} / {@link #FIRST_NOT_A_FRAME}
+     */
+    public int peekFirstPacketId() {
+        VarIntRead lenPrefix = VarIntCodec.read(buf, start, limit);
+        if (lenPrefix == null) {
+            return limit - start >= 5 ? FIRST_NOT_A_FRAME : FIRST_NEED_MORE;
+        }
+        int payloadLen = lenPrefix.value();
+        if (payloadLen == 0) {
+            return FIRST_EMPTY_FRAME;
+        }
+        if (payloadLen < 0 || payloadLen > maxFrameLength) {
+            return FIRST_NOT_A_FRAME;
+        }
+        // packetId 必须落在首帧载荷内：只在载荷已到的那部分字节里解。
+        int idEnd = (int) Math.min((long) lenPrefix.next() + payloadLen, (long) limit);
+        VarIntRead packetId = VarIntCodec.read(buf, lenPrefix.next(), idEnd);
+        if (packetId == null) {
+            return idEnd - lenPrefix.next() >= 5 || idEnd - lenPrefix.next() >= payloadLen
+                ? FIRST_NOT_A_FRAME : FIRST_NEED_MORE;
+        }
+        return packetId.value() < 0 ? FIRST_NOT_A_FRAME : packetId.value();
+    }
+
     /** 是否还有不足一帧的剩余字节。 */
     public boolean hasRemainder() {
         return start < limit;

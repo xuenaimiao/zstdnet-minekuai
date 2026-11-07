@@ -58,6 +58,22 @@
 
 ---
 
+## 能和 AutoModpack（整合包自动同步）一起用吗？
+
+能。AutoModpack 5.x 默认的 `HOLEPUNCH` 模式复用 Minecraft 的游戏端口：它在同一个端口上自己再做一遍原版的
+「加密请求 / 加密响应」，然后在 AES 之上跑 TLS 下载整合包。玩家经 ZstdNet 进服时，这条连接同样走 ZstdNet 的本地代理 → 服务端入口。
+
+早期版本的服务端会把这条加密后的下行流当成明文 MC 包流去做区块缓存，把密文**憋在缓冲里**不发，导致 AutoModpack 与服务端互相等待，
+10 秒后报 `SSLException: Couldn't kickstart handshaking`（服务端是 `handshake timed out after 10000ms`）。
+现在服务端会识别「下行首帧是加密请求」的连接，对它关闭区块缓存 / 实体变换、原样透传。**只需要升级服务端的 ZstdNet**，客户端不用改。
+
+另外，AutoModpack 在**游戏启动前**会直连服务器的公网端口检查整合包更新；ZstdNet 的入口只接 ZSTD 流，会把这类直连当作裸登录拒绝，
+AutoModpack 日志里表现为 `Modpack server ... is unreachable; continuing with the local state without a sync`。这是无害的降级，
+进服时的同步（经 ZstdNet）不受影响。若希望启动前的检查也生效，可以按 AutoModpack 官方文档把整合包下载挪到它自己的端口
+（`connection-mode: MAGIC` + 专用 `bind-port`，并用 `advertised-endpoint-host` / `advertised-endpoint-port` 指向该端口），不经过 ZstdNet。
+
+---
+
 ## 语音模组（Simple Voice Chat 等）能用吗？
 
 能，**零配置自动兼容**：Simple Voice Chat、Plasmo，以及 Sable / 机械动力：航空学这类「同端口 UDP」模组都支持。

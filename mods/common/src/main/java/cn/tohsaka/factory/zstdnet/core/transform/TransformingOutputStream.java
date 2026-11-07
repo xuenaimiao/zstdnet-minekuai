@@ -44,6 +44,10 @@ public final class TransformingOutputStream extends OutputStream {
     private final byte[] one = new byte[1];
     private boolean preambleWritten = false;
     private boolean closed = false;
+    /** 首帧入口闸是否已出结论（见 {@link FirstFrameGate}）。 */
+    private boolean gateDecided = false;
+    /** 入口闸判定这条流不是明文 MC 帧流（密文 / 异种协议）：此后原样透传，不切帧、不写前导、不缓冲。 */
+    private boolean unframed = false;
 
     /** 仅 Layer A（无 packet 表）。 */
     public TransformingOutputStream(OutputStream out, int version) {
@@ -73,11 +77,37 @@ public final class TransformingOutputStream extends OutputStream {
         if (closed) {
             throw new IOException("zstdnet transform: write after close");
         }
+        if (unframed) {
+            out.write(b, off, len);
+            return;
+        }
         framer.append(b, off, len);
     }
 
     @Override
     public void flush() throws IOException {
+        if (!gateDecided) {
+            FirstFrameGate.Verdict verdict = FirstFrameGate.decide(framer);
+            if (verdict == FirstFrameGate.Verdict.UNDECIDED) {
+                out.flush();
+                return;
+            }
+            gateDecided = true;
+            if (verdict == FirstFrameGate.Verdict.UNFRAMED) {
+                // 同 CacheTransformingOutputStream：首帧是加密请求 / 非 MC 帧 → 永久原样透传，不写前导、不缓冲。
+                unframed = true;
+                byte[] pending = framer.drainRemainder();
+                if (pending.length > 0) {
+                    out.write(pending, 0, pending.length);
+                }
+                out.flush();
+                return;
+            }
+        }
+        if (unframed) {
+            out.flush();
+            return;
+        }
         PacketFramer.Batch batch = framer.peelComplete();
         if (batch != null) {
             ensurePreamble();
@@ -102,7 +132,14 @@ public final class TransformingOutputStream extends OutputStream {
         }
         closed = true;
         try (OutputStream underlying = out) {
-            PacketFramer.Batch batch = framer.peelComplete();
+            if (!gateDecided && FirstFrameGate.decide(framer) == FirstFrameGate.Verdict.UNFRAMED) {
+                unframed = true;
+                byte[] pending = framer.drainRemainder();
+                if (pending.length > 0) {
+                    underlying.write(pending, 0, pending.length);
+                }
+            }
+            PacketFramer.Batch batch = unframed ? null : framer.peelComplete();
             if (batch != null) {
                 ensurePreamble();
                 if (useLayerB) {

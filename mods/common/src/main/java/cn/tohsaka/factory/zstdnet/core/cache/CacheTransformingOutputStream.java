@@ -25,6 +25,7 @@ import cn.tohsaka.factory.zstdnet.core.cache.patch.ChunkStructureParser;
 import cn.tohsaka.factory.zstdnet.core.cache.patch.DeltaCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntCodec;
 import cn.tohsaka.factory.zstdnet.core.protocol.VarIntRead;
+import cn.tohsaka.factory.zstdnet.core.transform.FirstFrameGate;
 import cn.tohsaka.factory.zstdnet.core.transform.PacketFramer;
 
 import org.slf4j.Logger;
@@ -48,6 +49,10 @@ import java.util.Set;
  * </ul>
  * 流首一次性写 PREAMBLE（对端 {@link CacheUntransformingInputStream} 据此识别）。关闭时落定剩余完整帧 + 把
  * 不足一帧的尾字节也当 PASSTHROUGH 原样写出，保证逆向逐字节还原。
+ *
+ * <p><b>入口闸：</b>首次切帧前先过 {@link FirstFrameGate}——首帧若是登录态 Encryption Request（其后整条流是 AES 密文）
+ * 或根本不是 MC 帧，本流对该连接永久退化为原样透传（不写前导、不切帧、不缓冲）。否则密文会被当成永远收不齐的大帧憋住
+ * （AutoModpack 5.x 的 HOLEPUNCH 就是这样被卡死的）。
  *
  * <p>正确性见 {@link ChunkCacheFormat} 与 {@link LruByteCache}：REF 仅在 {@link LruByteCache#peek} 命中且整字节相等时
  * 发出（规避哈希碰撞），编码端缓存与客户端缓存同步淘汰 → 会话内 REF 不会 miss。
@@ -75,6 +80,10 @@ public final class CacheTransformingOutputStream extends OutputStream {
     private final long[] posKey = new long[1]; // readChunkPosKey 复用，免每帧分配
     private boolean preambleWritten = false;
     private boolean closed = false;
+    /** 首帧入口闸是否已出结论（见 {@link FirstFrameGate}）；出结论前最多只暂存首帧的几个前缀字节。 */
+    private boolean gateDecided = false;
+    /** 入口闸判定这条流不是明文 MC 帧流（密文 / 异种协议）：此后一律原样透传，不切帧、不写前导、不缓冲。 */
+    private boolean unframed = false;
 
     /**
      * 每个区块坐标的 PATCH 基线状态（编码端独有；解码端不需要——PATCH block 显式带 baseHash）。
@@ -167,11 +176,39 @@ public final class CacheTransformingOutputStream extends OutputStream {
         if (closed) {
             throw new IOException("zstdnet chunk-cache: write after close");
         }
+        if (unframed) {
+            out.write(b, off, len);
+            return;
+        }
         framer.append(b, off, len);
     }
 
     @Override
     public void flush() throws IOException {
+        if (!gateDecided) {
+            FirstFrameGate.Verdict verdict = FirstFrameGate.decide(framer);
+            if (verdict == FirstFrameGate.Verdict.UNDECIDED) {
+                out.flush();
+                return;
+            }
+            gateDecided = true;
+            if (verdict == FirstFrameGate.Verdict.UNFRAMED) {
+                // 这条流后面是 AES 密文（加密请求）或根本不是 MC 帧流：CRC 对它没有意义，更不能把密文当成
+                // 永远收不齐的大帧憋在 framer 里。永久退化为原样透传，且不写前导——客户端解码端见无 MAGIC 即透传。
+                unframed = true;
+                byte[] pending = framer.drainRemainder();
+                if (pending.length > 0) {
+                    out.write(pending, 0, pending.length);
+                }
+                LOGGER.debug("[chunk_cache] downstream is not a plain MC frame stream (encrypted or foreign protocol) -> CRC disabled for this connection");
+                out.flush();
+                return;
+            }
+        }
+        if (unframed) {
+            out.flush();
+            return;
+        }
         PacketFramer.Batch batch = framer.peelComplete();
         if (batch != null) {
             ensurePreamble();
@@ -188,7 +225,15 @@ public final class CacheTransformingOutputStream extends OutputStream {
         }
         closed = true;
         try (OutputStream underlying = out) {
-            PacketFramer.Batch batch = framer.peelComplete();
+            if (!gateDecided && FirstFrameGate.decide(framer) == FirstFrameGate.Verdict.UNFRAMED) {
+                // 流在入口闸出结论前就结束了，且这点字节不是明文 MC 帧：原样吐出，别对它切帧。
+                unframed = true;
+                byte[] pending = framer.drainRemainder();
+                if (pending.length > 0) {
+                    underlying.write(pending, 0, pending.length);
+                }
+            }
+            PacketFramer.Batch batch = unframed ? null : framer.peelComplete();
             if (batch != null) {
                 ensurePreamble();
                 encodeBatch(batch);
